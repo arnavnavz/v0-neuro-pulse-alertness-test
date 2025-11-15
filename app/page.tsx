@@ -373,6 +373,61 @@ export default function NeuroPulsePage() {
     }, 100) // Capture frame every 100ms
   }
 
+  // Detect if a face is present in the video frames
+  const detectFacePresence = (analysis: { frames: ImageData[], movementData: number[] } | null): boolean => {
+    if (!analysis || analysis.frames.length === 0) return false
+    
+    const frames = analysis.frames
+    const movementData = analysis.movementData
+    
+    // Need at least a few frames to analyze
+    if (frames.length < 5) return false
+    
+    // Calculate average movement
+    const averageMovement = movementData.length > 0
+      ? movementData.reduce((a, b) => a + b, 0) / movementData.length
+      : 0
+    
+    // If average movement is extremely high (>80), likely no face (camera moving or facing elsewhere)
+    if (averageMovement > 80) return false
+    
+    // Check brightness consistency in center region (face region)
+    const centerBrightness: number[] = []
+    frames.forEach((frame) => {
+      if (frame && frame.data.length > 0) {
+        // Sample center region (where face typically is)
+        let brightness = 0
+        const sampleCount = Math.min(500, frame.data.length / 4)
+        const centerStart = (frame.data.length / 4) * 0.3 // Start at 30% of frame
+        const centerEnd = (frame.data.length / 4) * 0.7 // End at 70% of frame
+        
+        for (let i = 0; i < sampleCount; i++) {
+          const pixelIdx = Math.floor(centerStart + (i / sampleCount) * (centerEnd - centerStart)) * 4
+          if (pixelIdx < frame.data.length - 3) {
+            brightness += (frame.data[pixelIdx] + frame.data[pixelIdx + 1] + frame.data[pixelIdx + 2]) / 3
+          }
+        }
+        centerBrightness.push(brightness / sampleCount)
+      }
+    })
+    
+    // Check brightness consistency (face should have relatively consistent brightness)
+    if (centerBrightness.length > 5) {
+      const avgBrightness = centerBrightness.reduce((a, b) => a + b, 0) / centerBrightness.length
+      const brightnessVariance = centerBrightness.reduce((sum, b) => sum + Math.pow(b - avgBrightness, 2), 0) / centerBrightness.length
+      const brightnessStdDev = Math.sqrt(brightnessVariance)
+      
+      // If brightness is too inconsistent (std dev > 40), likely no face
+      if (brightnessStdDev > 40) return false
+      
+      // If average brightness is too low (< 30) or too high (> 200), likely no face
+      if (avgBrightness < 30 || avgBrightness > 200) return false
+    }
+    
+    // If we have reasonable movement patterns and brightness, assume face is present
+    return true
+  }
+
   // Analyze all captured video frames
   const analyzeVideoFrames = (): VideoAnalysis => {
     const analysis = videoAnalysisRef.current
@@ -491,13 +546,14 @@ export default function NeuroPulsePage() {
   }
 
   // Calculate NeuroScore from reaction time and movement
-  const calculateNeuroScore = (reactionMs: number, movement: number): number => {
+  const calculateNeuroScore = (reactionMs: number, movement: number, hasFace: boolean = true): number => {
     // Ideal reaction time: 200-300ms = 100 score
     // Movement penalty: high movement (>50) suggests fatigue
+    // If no face detected, movement is unreliable, so don't penalize based on it
     
     let reactionScore = 100
     if (reactionMs < 200) {
-      reactionScore = 70 // Too fast might be anticipation
+      reactionScore = 85 // Too fast might be anticipation, but still good
     } else if (reactionMs <= 300) {
       reactionScore = 100
     } else if (reactionMs <= 500) {
@@ -509,7 +565,17 @@ export default function NeuroPulsePage() {
     }
     
     // Movement penalty (less movement = more alert)
-    const movementPenalty = Math.min(movement * 0.3, 30)
+    // Only apply movement penalty if face is detected and movement is significant
+    let movementPenalty = 0
+    if (hasFace && movement > 20) {
+      // Reduced penalty: only penalize for significant movement (>20)
+      // Use a gentler curve: movement 20-50 = small penalty, 50+ = larger penalty
+      if (movement > 50) {
+        movementPenalty = Math.min(15 + (movement - 50) * 0.2, 25)
+      } else {
+        movementPenalty = (movement - 20) * 0.1
+      }
+    }
     
     const finalScore = Math.max(0, Math.min(100, reactionScore - movementPenalty))
     return Math.round(finalScore)
@@ -695,6 +761,16 @@ export default function NeuroPulsePage() {
   const finishFlashTest = async () => {
     // Stop video recording and analyze
     const videoAnalysis = await stopVideoRecording()
+    
+    // Check if face is present
+    const hasFace = detectFacePresence(videoAnalysisRef.current)
+    
+    if (!hasFace) {
+      // No face detected - show error message
+      alert('No face detected. Please ensure your face is visible in the camera and try again.')
+      setTestState('idle')
+      return
+    }
     
     // Mock results (in production, this would come from backend analysis)
     const reactionTimeMs = Math.round(220 + Math.random() * 150)
@@ -944,8 +1020,20 @@ export default function NeuroPulsePage() {
       ? calculateMovementIndex(beforeFrameRef.current, afterFrame)
       : 0
     
-    // Calculate scores
-    const neuroScore = calculateNeuroScore(reactionTime, movement)
+    // Check if face is present (use video analysis if available, otherwise check movement)
+    const hasFace = videoAnalysis 
+      ? detectFacePresence(videoAnalysisRef.current)
+      : movement < 80 // If no video analysis, assume face if movement isn't extremely high
+    
+    // If no face detected and movement is very high, cap movement to prevent false penalties
+    let adjustedMovement = movement
+    if (!hasFace && movement > 50) {
+      // If no face, movement calculation is unreliable - use a conservative value
+      adjustedMovement = Math.min(movement, 30)
+    }
+    
+    // Calculate scores with face detection info
+    const neuroScore = calculateNeuroScore(reactionTime, adjustedMovement, hasFace)
     const alertLevel = getAlertLevel(neuroScore)
     
     // Calculate fatigue metrics (single reaction time for simple test)
@@ -953,7 +1041,7 @@ export default function NeuroPulsePage() {
     
     const testResults = {
       reactionTime,
-      movementIndex: movement,
+      movementIndex: adjustedMovement,
       neuroScore,
       alertLevel,
       fatigueMetrics,
