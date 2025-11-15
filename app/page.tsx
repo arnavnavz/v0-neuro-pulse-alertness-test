@@ -36,6 +36,7 @@ interface DotGridResults {
   averageReactionTime: number
   hits: number
   misses: number
+  errors: number
   dotScore: number
   fatigueMetrics: FatigueMetrics
   videoAnalysis?: VideoAnalysis
@@ -101,6 +102,8 @@ export default function NeuroPulsePage() {
   const [dotRound, setDotRound] = useState<number>(0)
   const [dotReactionTimes, setDotReactionTimes] = useState<number[]>([])
   const [dotMisses, setDotMisses] = useState<number>(0)
+  const [dotErrors, setDotErrors] = useState<number>(0)
+  const dotContainerRef = useRef<HTMLDivElement>(null)
   
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -128,7 +131,11 @@ export default function NeuroPulsePage() {
 
   // Load test history on mount
   useEffect(() => {
-    setTestHistory(storage.getTestHistory())
+    const loadHistory = async () => {
+      const history = await storage.getTestHistory()
+      setTestHistory(history)
+    }
+    loadHistory()
   }, [])
 
   // Initialize webcam
@@ -673,40 +680,52 @@ export default function NeuroPulsePage() {
           smoothedBrightness.push((prev * 0.2 + curr * 0.6 + next * 0.2))
         }
         
-        // Detect blinks with improved thresholds
+        // Detect blinks with improved thresholds (less sensitive to prevent false positives)
         let inBlink = false
         let blinkStartIdx = 0
+        let lastBlinkEnd = -10 // Track last blink end to prevent rapid re-triggering
         
         for (let i = 1; i < smoothedBrightness.length; i++) {
           const drop = smoothedBrightness[i - 1] - smoothedBrightness[i]
           const brightnessLevel = smoothedBrightness[i]
           
-          // Blink start: significant drop (>25) and brightness below threshold
-          if (!inBlink && drop > 25 && brightnessLevel < 80) {
+          // Blink start: significant drop (>30, increased from 25) and brightness below threshold
+          // Also require minimum time since last blink (at least 5 frames = 500ms)
+          if (!inBlink && drop > 30 && brightnessLevel < 70 && (i - lastBlinkEnd) > 5) {
             inBlink = true
             blinkStartIdx = i
           }
           
-          // Blink end: brightness recovers or small increase
+          // Blink end: brightness recovers significantly
           if (inBlink) {
             const recovery = smoothedBrightness[i] - smoothedBrightness[i - 1]
-            if (recovery > 15 || smoothedBrightness[i] > 100) {
+            const currentBrightness = smoothedBrightness[i]
+            const blinkDurationFrames = i - blinkStartIdx
+            
+            // Require minimum blink duration (at least 2 frames = 200ms) and recovery
+            if ((recovery > 20 || currentBrightness > 90) && blinkDurationFrames >= 2) {
               inBlink = false
               blinkCount++
-              const blinkDuration = (i - blinkStartIdx) * 100 // 100ms per frame
+              lastBlinkEnd = i
+              const blinkDuration = blinkDurationFrames * 100 // 100ms per frame
               eyeClosureDuration += blinkDuration
               blinkEvents.push({ start: blinkStartIdx, duration: blinkDuration })
             }
           }
         }
         
-        // Handle blink that extends to end of recording
-        if (inBlink) {
+        // Handle blink that extends to end of recording (only if it's a valid blink)
+        if (inBlink && (smoothedBrightness.length - blinkStartIdx) >= 2) {
           blinkCount++
           const blinkDuration = (smoothedBrightness.length - blinkStartIdx) * 100
           eyeClosureDuration += blinkDuration
           blinkEvents.push({ start: blinkStartIdx, duration: blinkDuration })
         }
+        
+        // Cap blink count at reasonable maximum (e.g., 1 blink per 2 seconds for typical test duration)
+        // For a 10-15 second test, max should be around 5-7 blinks
+        const maxReasonableBlinks = Math.ceil((smoothedBrightness.length * 100) / 2000) // 1 blink per 2 seconds
+        blinkCount = Math.min(blinkCount, maxReasonableBlinks)
       }
       
       // Enhanced pupil dilation analysis for flash test
@@ -1165,7 +1184,9 @@ export default function NeuroPulsePage() {
       ? Math.round(videoAnalysis.eyeClosureDuration / videoAnalysis.blinkCount)
       : Math.round(180 + Math.random() * 100)
     
-    const blinkCount = videoAnalysis?.blinkCount || Math.floor(2 + Math.random() * 3)
+    // Use video analysis blink count, but ensure it's reasonable (0-10 for flash test)
+    const rawBlinkCount = videoAnalysis?.blinkCount || 0
+    const blinkCount = Math.min(Math.max(0, rawBlinkCount), 10) // Cap at 10 blinks max
     const stabilityScore = videoAnalysis
       ? Math.round(100 - (videoAnalysis.movementVariability * 0.5) - (videoAnalysis.averageMovement * 0.3))
       : Math.round(70 + Math.random() * 25)
@@ -1232,8 +1253,10 @@ export default function NeuroPulsePage() {
         simple: updatedSession.simple,
         dotgrid: updatedSession.dotgrid,
         flash: updatedSession.flash
-      }, combinedScore)
-      setTestHistory(storage.getTestHistory())
+      }, combinedScore).then(async () => {
+        const history = await storage.getTestHistory()
+        setTestHistory(history)
+      })
       setSessionInProgress(false)
     }
     
@@ -1260,8 +1283,13 @@ export default function NeuroPulsePage() {
     }, 2000)
   }
 
-  const handleDotClick = () => {
+  const handleDotClick = (e?: React.MouseEvent) => {
     if (!currentDot) return
+    
+    // If event is provided, stop propagation to prevent container click handler
+    if (e) {
+      e.stopPropagation()
+    }
     
     const reactionTime = performance.now() - currentDot.timestamp
     setDotReactionTimes(prev => [...prev, reactionTime])
@@ -1275,6 +1303,45 @@ export default function NeuroPulsePage() {
     spawnNextDot(dotRound)
   }
 
+  const handleDotContainerClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!currentDot || !dotContainerRef.current) return
+    
+    // Get container bounds
+    const container = dotContainerRef.current
+    const rect = container.getBoundingClientRect()
+    
+    // Calculate click position relative to container
+    const clickX = e.clientX - rect.left
+    const clickY = e.clientY - rect.top
+    
+    // Calculate dot center position in pixels
+    const dotX = (currentDot.x / 100) * rect.width
+    const dotY = (currentDot.y / 100) * rect.height
+    
+    // Dot radius is 32px (half of w-16 h-16 which is 64px)
+    const dotRadius = 32
+    
+    // Calculate distance from click to dot center
+    const distance = Math.sqrt(
+      Math.pow(clickX - dotX, 2) + Math.pow(clickY - dotY, 2)
+    )
+    
+    // Clear timeout when clicking (whether inside or outside)
+    if (dotTimeoutRef.current) {
+      clearTimeout(dotTimeoutRef.current)
+    }
+    
+    // If click is outside the circle, count as error and move to next dot
+    if (distance > dotRadius) {
+      setDotErrors(prev => prev + 1)
+      setCurrentDot(null)
+      spawnNextDot(dotRound)
+    } else {
+      // Click is inside circle, handle as normal hit
+      handleDotClick()
+    }
+  }
+
   const handleDotMiss = () => {
     setDotMisses(prev => prev + 1)
     setCurrentDot(null)
@@ -1286,34 +1353,49 @@ export default function NeuroPulsePage() {
     // Stop video recording and analyze
     const videoAnalysis = await stopVideoRecording()
     
-    const avgReactionTime = dotReactionTimes.length > 0
-      ? Math.round(dotReactionTimes.reduce((a, b) => a + b, 0) / dotReactionTimes.length)
-      : 0
-    
     const hits = dotReactionTimes.length
     const misses = dotMisses
-    const totalAttempts = hits + misses
+    const errors = dotErrors
+    const totalAttempts = hits + misses + errors
     
-    // Calculate DotScore (0-100)
-    let dotScore = 100
+    const avgReactionTime = hits > 0
+      ? Math.round(dotReactionTimes.reduce((a, b) => a + b, 0) / hits)
+      : 0
     
-    // Penalize for slow average reaction time
-    if (avgReactionTime > 800) dotScore -= 40
-    else if (avgReactionTime > 600) dotScore -= 25
-    else if (avgReactionTime > 400) dotScore -= 10
+    // Calculate DotScore (0-100) based on accuracy and performance
+    // Base score on accuracy: (hits / 10) * 70 points (70% weight on accuracy)
+    const accuracyScore = (hits / 10) * 70
     
-    // Penalize for misses
-    dotScore -= misses * 8
+    // Performance score based on reaction time: 30 points (30% weight on speed)
+    let performanceScore = 30
+    if (avgReactionTime > 0) {
+      if (avgReactionTime > 800) performanceScore = 5
+      else if (avgReactionTime > 600) performanceScore = 10
+      else if (avgReactionTime > 400) performanceScore = 20
+      else if (avgReactionTime > 300) performanceScore = 25
+      else performanceScore = 30
+    } else {
+      // No hits means no performance score
+      performanceScore = 0
+    }
     
-    dotScore = Math.max(0, Math.min(100, dotScore))
+    // Additional penalties for errors (clicks outside) - more severe
+    const errorPenalty = errors * 3
     
-    // Calculate fatigue metrics
-    const fatigueMetrics = calculateFatigueMetrics(dotReactionTimes, misses, totalAttempts)
+    // Penalty for misses
+    const missPenalty = misses * 2
+    
+    let dotScore = accuracyScore + performanceScore - errorPenalty - missPenalty
+    dotScore = Math.max(0, Math.min(100, Math.round(dotScore)))
+    
+    // Calculate fatigue metrics (include errors in total attempts)
+    const fatigueMetrics = calculateFatigueMetrics(dotReactionTimes, misses + errors, totalAttempts)
     
     const testResults = {
       averageReactionTime: avgReactionTime,
       hits,
       misses,
+      errors,
       dotScore: Math.round(dotScore),
       fatigueMetrics,
       videoAnalysis: videoAnalysis || undefined
@@ -1333,8 +1415,10 @@ export default function NeuroPulsePage() {
         simple: updatedSession.simple,
         dotgrid: updatedSession.dotgrid,
         flash: updatedSession.flash
-      }, combinedScore)
-      setTestHistory(storage.getTestHistory())
+      }, combinedScore).then(async () => {
+        const history = await storage.getTestHistory()
+        setTestHistory(history)
+      })
       setSessionInProgress(false)
     }
     
@@ -1364,6 +1448,7 @@ export default function NeuroPulsePage() {
       // Start dot grid test
       setDotReactionTimes([])
       setDotMisses(0)
+      setDotErrors(0)
       setDotRound(0)
       
       // Short countdown then start
@@ -1463,8 +1548,10 @@ export default function NeuroPulsePage() {
         simple: updatedSession.simple,
         dotgrid: updatedSession.dotgrid,
         flash: updatedSession.flash
-      }, combinedScore)
-      setTestHistory(storage.getTestHistory())
+      }, combinedScore).then(async () => {
+        const history = await storage.getTestHistory()
+        setTestHistory(history)
+      })
       setSessionInProgress(false)
     }
     
@@ -1479,8 +1566,10 @@ export default function NeuroPulsePage() {
         simple: currentSession.simple,
         dotgrid: currentSession.dotgrid,
         flash: currentSession.flash
-      }, combinedScore)
-      setTestHistory(storage.getTestHistory())
+      }, combinedScore).then(async () => {
+        const history = await storage.getTestHistory()
+        setTestHistory(history)
+      })
       setSessionInProgress(false)
     }
   }
@@ -1814,8 +1903,8 @@ export default function NeuroPulsePage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => {
-                      storage.clearHistory()
+                    onClick={async () => {
+                      await storage.clearHistory()
                       setTestHistory([])
                       setSelectedTests([])
                     }}
@@ -1891,10 +1980,11 @@ export default function NeuroPulsePage() {
                             variant="ghost"
                             size="icon"
                             className="h-6 w-6"
-                            onClick={(e) => {
+                            onClick={async (e) => {
                               e.stopPropagation()
-                              storage.deleteTest(test.id)
-                              setTestHistory(storage.getTestHistory())
+                              await storage.deleteTest(test.id)
+                              const history = await storage.getTestHistory()
+                              setTestHistory(history)
                               setSelectedTests(prev => prev.filter(id => id !== test.id))
                             }}
                           >
@@ -2772,14 +2862,18 @@ export default function NeuroPulsePage() {
               )}
 
               {testState === 'flash' && testMode === 'dotgrid' && (
-                <div className="relative bg-secondary rounded-lg border-2 border-border h-80 sm:h-96">
+                <div 
+                  ref={dotContainerRef}
+                  onClick={handleDotContainerClick}
+                  className="relative bg-secondary rounded-lg border-2 border-border h-80 sm:h-96 cursor-pointer"
+                >
                   <div className="absolute top-2 left-3 text-sm font-semibold text-foreground">
                     Round {dotRound}/10
                   </div>
                   {currentDot && (
                     <button
                       onClick={handleDotClick}
-                      className="absolute w-16 h-16 sm:w-16 sm:h-16 bg-primary rounded-full active:scale-110 transition-transform cursor-pointer shadow-lg touch-manipulation min-w-[64px] min-h-[64px]"
+                      className="absolute w-16 h-16 sm:w-16 sm:h-16 bg-primary rounded-full active:scale-110 transition-transform cursor-pointer shadow-lg touch-manipulation min-w-[64px] min-h-[64px] z-10"
                       style={{
                         left: `${currentDot.x}%`,
                         top: `${currentDot.y}%`,
@@ -2852,6 +2946,12 @@ export default function NeuroPulsePage() {
                         <p className="text-xs text-muted-foreground mb-1">Misses</p>
                         <p className="text-xl font-bold text-destructive">
                           {dotGridResults.misses}
+                        </p>
+                      </div>
+                      <div className="bg-secondary p-3 rounded-lg text-center">
+                        <p className="text-xs text-muted-foreground mb-1">Errors</p>
+                        <p className="text-xl font-bold text-orange-500">
+                          {dotGridResults.errors || 0}
                         </p>
                       </div>
                     </div>
