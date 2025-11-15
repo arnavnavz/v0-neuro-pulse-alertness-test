@@ -1055,33 +1055,37 @@ export default function NeuroPulsePage() {
 
   // Calculate NeuroScore from reaction time and movement
   const calculateNeuroScore = (reactionMs: number, movement: number, hasFace: boolean = true): number => {
-    // Ideal reaction time: 200-300ms = 100 score
-    // Movement penalty: high movement (>50) suggests fatigue
+    // Ideal reaction time: 150-350ms = high score
+    // Movement penalty: only significant movement (>60) suggests fatigue
     // If no face detected, movement is unreliable, so don't penalize based on it
     
     let reactionScore = 100
-    if (reactionMs < 200) {
-      reactionScore = 85 // Too fast might be anticipation, but still good
+    if (reactionMs < 150) {
+      reactionScore = 95 // Very fast - might be anticipation, but still excellent
+    } else if (reactionMs < 200) {
+      reactionScore = 100 // Fast and optimal
     } else if (reactionMs <= 300) {
-      reactionScore = 100
+      reactionScore = 100 // Ideal range
+    } else if (reactionMs <= 400) {
+      reactionScore = 90 // Still very good
     } else if (reactionMs <= 500) {
-      reactionScore = 80
+      reactionScore = 75 // Good
     } else if (reactionMs <= 700) {
-      reactionScore = 60
+      reactionScore = 55 // Moderate
     } else {
-      reactionScore = 30
+      reactionScore = 35 // Slow
     }
     
     // Movement penalty (less movement = more alert)
-    // Only apply movement penalty if face is detected and movement is significant
+    // Only apply movement penalty if face is detected and movement is very significant
     let movementPenalty = 0
-    if (hasFace && movement > 20) {
-      // Reduced penalty: only penalize for significant movement (>20)
-      // Use a gentler curve: movement 20-50 = small penalty, 50+ = larger penalty
-      if (movement > 50) {
-        movementPenalty = Math.min(15 + (movement - 50) * 0.2, 25)
+    if (hasFace && movement > 60) {
+      // Only penalize for very high movement (>60)
+      // Use a gentler curve: movement 60-80 = small penalty, 80+ = larger penalty
+      if (movement > 80) {
+        movementPenalty = Math.min(10 + (movement - 80) * 0.15, 20)
       } else {
-        movementPenalty = (movement - 20) * 0.1
+        movementPenalty = (movement - 60) * 0.2
       }
     }
     
