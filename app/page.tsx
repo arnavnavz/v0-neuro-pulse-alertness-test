@@ -399,7 +399,7 @@ export default function NeuroPulsePage() {
     }, 100) // Capture frame every 100ms
   }
 
-  // Detect if a face is present in the video frames
+  // Enhanced face detection with multiple heuristics
   const detectFacePresence = (analysis: { frames: ImageData[], movementData: number[] } | null): boolean => {
     if (!analysis || analysis.frames.length === 0) return false
     
@@ -417,41 +417,128 @@ export default function NeuroPulsePage() {
     // If average movement is extremely high (>80), likely no face (camera moving or facing elsewhere)
     if (averageMovement > 80) return false
     
-    // Check brightness consistency in center region (face region)
+    // Enhanced brightness analysis with multiple regions
     const centerBrightness: number[] = []
+    const eyeRegionBrightness: number[] = []
+    const skinTonePixels: number[] = []
+    
     frames.forEach((frame) => {
-      if (frame && frame.data.length > 0) {
-        // Sample center region (where face typically is)
-        let brightness = 0
-        const sampleCount = Math.min(500, frame.data.length / 4)
-        const centerStart = (frame.data.length / 4) * 0.3 // Start at 30% of frame
-        const centerEnd = (frame.data.length / 4) * 0.7 // End at 70% of frame
+      if (frame && frame.data.length > 0 && frame.width > 0 && frame.height > 0) {
+        const width = frame.width
+        const height = frame.height
+        const centerX = Math.floor(width / 2)
+        const centerY = Math.floor(height / 2)
         
-        for (let i = 0; i < sampleCount; i++) {
-          const pixelIdx = Math.floor(centerStart + (i / sampleCount) * (centerEnd - centerStart)) * 4
-          if (pixelIdx < frame.data.length - 3) {
-            brightness += (frame.data[pixelIdx] + frame.data[pixelIdx + 1] + frame.data[pixelIdx + 2]) / 3
+        // Sample center region (face area)
+        let centerBright = 0
+        let centerCount = 0
+        
+        // Sample eye region (upper center, typically 30-40% from top)
+        let eyeBright = 0
+        let eyeCount = 0
+        
+        // Sample for skin tone detection (center region, typical skin RGB ranges)
+        let skinCount = 0
+        let totalPixels = 0
+        
+        for (let y = Math.max(0, centerY - height * 0.2); y < Math.min(height, centerY + height * 0.3); y += 3) {
+          for (let x = Math.max(0, centerX - width * 0.25); x < Math.min(width, centerX + width * 0.25); x += 3) {
+            const idx = (y * width + x) * 4
+            if (idx >= frame.data.length - 3) continue
+            
+            const r = frame.data[idx]
+            const g = frame.data[idx + 1]
+            const b = frame.data[idx + 2]
+            const brightness = (r + g + b) / 3
+            
+            // Center region brightness
+            centerBright += brightness
+            centerCount++
+            
+            // Eye region (upper portion of center)
+            if (y < centerY && y > centerY - height * 0.15) {
+              eyeBright += brightness
+              eyeCount++
+            }
+            
+            // Skin tone detection: typical skin has R > G > B and within certain ranges
+            totalPixels++
+            if (r > g && g > b && r > 95 && r < 240 && g > 40 && g < 210 && b > 20 && b < 180) {
+              skinCount++
+            }
           }
         }
-        centerBrightness.push(brightness / sampleCount)
+        
+        if (centerCount > 0) {
+          centerBrightness.push(centerBright / centerCount)
+        }
+        if (eyeCount > 0) {
+          eyeRegionBrightness.push(eyeBright / eyeCount)
+        }
+        if (totalPixels > 0) {
+          skinTonePixels.push((skinCount / totalPixels) * 100)
+        }
       }
     })
     
     // Check brightness consistency (face should have relatively consistent brightness)
+    let brightnessScore = 0
     if (centerBrightness.length > 5) {
       const avgBrightness = centerBrightness.reduce((a, b) => a + b, 0) / centerBrightness.length
       const brightnessVariance = centerBrightness.reduce((sum, b) => sum + Math.pow(b - avgBrightness, 2), 0) / centerBrightness.length
       const brightnessStdDev = Math.sqrt(brightnessVariance)
       
-      // If brightness is too inconsistent (std dev > 40), likely no face
-      if (brightnessStdDev > 40) return false
+      // Score based on brightness consistency and range
+      if (brightnessStdDev < 30 && avgBrightness >= 40 && avgBrightness <= 180) {
+        brightnessScore += 2
+      } else if (brightnessStdDev < 40 && avgBrightness >= 30 && avgBrightness <= 200) {
+        brightnessScore += 1
+      }
       
-      // If average brightness is too low (< 30) or too high (> 200), likely no face
-      if (avgBrightness < 30 || avgBrightness > 200) return false
+      // Check if brightness is too inconsistent or out of range
+      if (brightnessStdDev > 50 || avgBrightness < 20 || avgBrightness > 220) {
+        return false
+      }
     }
     
-    // If we have reasonable movement patterns and brightness, assume face is present
-    return true
+    // Check eye region consistency (eyes should have some variation but not too much)
+    if (eyeRegionBrightness.length > 5) {
+      const avgEyeBright = eyeRegionBrightness.reduce((a, b) => a + b, 0) / eyeRegionBrightness.length
+      const eyeVariance = eyeRegionBrightness.reduce((sum, b) => sum + Math.pow(b - avgEyeBright, 2), 0) / eyeRegionBrightness.length
+      const eyeStdDev = Math.sqrt(eyeVariance)
+      
+      // Eyes should have moderate variation (blinks, eye movements)
+      if (eyeStdDev > 10 && eyeStdDev < 50) {
+        brightnessScore += 1
+      }
+    }
+    
+    // Check skin tone presence (faces typically have skin-colored pixels)
+    if (skinTonePixels.length > 0) {
+      const avgSkinPercent = skinTonePixels.reduce((a, b) => a + b, 0) / skinTonePixels.length
+      if (avgSkinPercent > 15) { // At least 15% skin-colored pixels
+        brightnessScore += 1
+      } else if (avgSkinPercent < 5) {
+        // Very few skin pixels, likely no face
+        return false
+      }
+    }
+    
+    // Movement pattern analysis: face should have some small movements but not chaotic
+    if (movementData.length > 5) {
+      const movementVariance = movementData.reduce((sum, m) => {
+        return sum + Math.pow(m - averageMovement, 2)
+      }, 0) / movementData.length
+      const movementStdDev = Math.sqrt(movementVariance)
+      
+      // Good face movement: moderate average with reasonable variance
+      if (averageMovement > 5 && averageMovement < 60 && movementStdDev < 30) {
+        brightnessScore += 1
+      }
+    }
+    
+    // Need at least 2 positive indicators to confirm face presence
+    return brightnessScore >= 2
   }
 
   // Analyze all captured video frames (enhanced for flash test with pupil dilation)
@@ -488,32 +575,39 @@ export default function NeuroPulsePage() {
         ))
       : 0
     
-    // Enhanced analysis for flash test (pupil dilation detection)
+    // Enhanced analysis for flash test (pupil dilation detection) and blink detection
     let blinkCount = 0
     let eyeClosureDuration = 0
     let pupilDilationData: number[] = []
+    let blinkEvents: { start: number, duration: number }[] = []
     
     if (frames.length > 10) {
-      // Analyze center region (where pupil/eye typically is)
+      // Enhanced eye region analysis with better pupil detection
       const eyeRegionBrightness: number[] = []
       const pupilSizeData: number[] = []
+      const eyeContrastData: number[] = [] // Contrast helps detect pupil edges
       
       frames.forEach((frame, idx) => {
-        if (frame && frame.data.length > 0) {
-          // For flash test, analyze center region more precisely
-          const centerX = Math.floor(frame.width / 2)
-          const centerY = Math.floor(frame.height / 2)
-          const regionSize = isFlashTest ? 100 : 50 // Larger region for flash test
+        if (frame && frame.data.length > 0 && frame.width > 0 && frame.height > 0) {
+          const width = frame.width
+          const height = frame.height
+          const centerX = Math.floor(width / 2)
+          const centerY = Math.floor(height / 2)
+          
+          // For flash test, analyze center region more precisely with adaptive sizing
+          const regionSize = isFlashTest ? Math.min(120, Math.min(width, height) * 0.3) : 50
           
           let brightness = 0
           let darkPixelCount = 0 // Count dark pixels (pupil)
+          let veryDarkPixelCount = 0 // Very dark pixels (pupil center)
           let sampleCount = 0
+          let contrastSum = 0
           
-          // Sample region around center
+          // Sample region around center with better coverage
           for (let y = centerY - regionSize; y < centerY + regionSize; y += 2) {
             for (let x = centerX - regionSize; x < centerX + regionSize; x += 2) {
-              if (x >= 0 && x < frame.width && y >= 0 && y < frame.height) {
-                const pixelIdx = (y * frame.width + x) * 4
+              if (x >= 0 && x < width && y >= 0 && y < height) {
+                const pixelIdx = (y * width + x) * 4
                 if (pixelIdx < frame.data.length - 3) {
                   const r = frame.data[pixelIdx]
                   const g = frame.data[pixelIdx + 1]
@@ -523,9 +617,26 @@ export default function NeuroPulsePage() {
                   brightness += pixelBrightness
                   sampleCount++
                   
-                  // For flash test, detect dark pixels (pupil)
-                  if (isFlashTest && pixelBrightness < 50) {
-                    darkPixelCount++
+                  // Enhanced pupil detection with multiple thresholds
+                  if (isFlashTest) {
+                    if (pixelBrightness < 50) {
+                      darkPixelCount++
+                    }
+                    if (pixelBrightness < 30) {
+                      veryDarkPixelCount++
+                    }
+                    
+                    // Calculate local contrast (helps detect pupil edges)
+                    if (x > 0 && y > 0 && x < width - 1 && y < height - 1) {
+                      const neighbors = [
+                        frame.data[((y - 1) * width + x) * 4],
+                        frame.data[(y * width + (x - 1)) * 4],
+                        frame.data[(y * width + (x + 1)) * 4],
+                        frame.data[((y + 1) * width + x) * 4]
+                      ]
+                      const neighborAvg = neighbors.reduce((a, b) => a + b, 0) / neighbors.length
+                      contrastSum += Math.abs(pixelBrightness - neighborAvg)
+                    }
                   }
                 }
               }
@@ -533,33 +644,101 @@ export default function NeuroPulsePage() {
           }
           
           if (sampleCount > 0) {
-            eyeRegionBrightness.push(brightness / sampleCount)
+            const avgBrightness = brightness / sampleCount
+            eyeRegionBrightness.push(avgBrightness)
+            
             if (isFlashTest) {
-              // Estimate pupil size as percentage of dark pixels in region
-              pupilSizeData.push((darkPixelCount / sampleCount) * 100)
+              // Enhanced pupil size estimation using both dark and very dark pixels
+              const darkPercent = (darkPixelCount / sampleCount) * 100
+              const veryDarkPercent = (veryDarkPixelCount / sampleCount) * 100
+              // Weighted average: very dark pixels are more likely to be pupil center
+              const estimatedPupilSize = (darkPercent * 0.6) + (veryDarkPercent * 0.4)
+              pupilSizeData.push(estimatedPupilSize)
+              
+              // Store contrast for edge detection
+              eyeContrastData.push(contrastSum / sampleCount)
             }
           }
         }
       })
       
-      // Detect blinks as sudden drops in brightness
-      for (let i = 1; i < eyeRegionBrightness.length; i++) {
-        const drop = eyeRegionBrightness[i - 1] - eyeRegionBrightness[i]
-        if (drop > 30) { // Significant brightness drop
+      // Enhanced blink detection with temporal smoothing and duration tracking
+      if (eyeRegionBrightness.length > 3) {
+        // Smooth brightness values to reduce noise
+        const smoothedBrightness: number[] = []
+        for (let i = 0; i < eyeRegionBrightness.length; i++) {
+          const prev = i > 0 ? eyeRegionBrightness[i - 1] : eyeRegionBrightness[i]
+          const curr = eyeRegionBrightness[i]
+          const next = i < eyeRegionBrightness.length - 1 ? eyeRegionBrightness[i + 1] : eyeRegionBrightness[i]
+          smoothedBrightness.push((prev * 0.2 + curr * 0.6 + next * 0.2))
+        }
+        
+        // Detect blinks with improved thresholds
+        let inBlink = false
+        let blinkStartIdx = 0
+        
+        for (let i = 1; i < smoothedBrightness.length; i++) {
+          const drop = smoothedBrightness[i - 1] - smoothedBrightness[i]
+          const brightnessLevel = smoothedBrightness[i]
+          
+          // Blink start: significant drop (>25) and brightness below threshold
+          if (!inBlink && drop > 25 && brightnessLevel < 80) {
+            inBlink = true
+            blinkStartIdx = i
+          }
+          
+          // Blink end: brightness recovers or small increase
+          if (inBlink) {
+            const recovery = smoothedBrightness[i] - smoothedBrightness[i - 1]
+            if (recovery > 15 || smoothedBrightness[i] > 100) {
+              inBlink = false
+              blinkCount++
+              const blinkDuration = (i - blinkStartIdx) * 100 // 100ms per frame
+              eyeClosureDuration += blinkDuration
+              blinkEvents.push({ start: blinkStartIdx, duration: blinkDuration })
+            }
+          }
+        }
+        
+        // Handle blink that extends to end of recording
+        if (inBlink) {
           blinkCount++
-          eyeClosureDuration += 100 // 100ms per frame
+          const blinkDuration = (smoothedBrightness.length - blinkStartIdx) * 100
+          eyeClosureDuration += blinkDuration
+          blinkEvents.push({ start: blinkStartIdx, duration: blinkDuration })
         }
       }
       
-      // For flash test, analyze pupil dilation response
+      // Enhanced pupil dilation analysis for flash test
       if (isFlashTest && pupilSizeData.length > 5) {
-        // Find baseline pupil size (first few frames before flash)
-        const baselineSize = pupilSizeData.slice(0, Math.min(5, pupilSizeData.length)).reduce((a, b) => a + b, 0) / Math.min(5, pupilSizeData.length)
+        // Find baseline pupil size (first few frames before flash, more robust)
+        const baselineFrames = Math.min(8, Math.floor(pupilSizeData.length * 0.3))
+        const baselineSize = pupilSizeData.slice(0, baselineFrames).reduce((a, b) => a + b, 0) / baselineFrames
         
-        // Track dilation changes (pupil should constrict after flash)
-        pupilDilationData = pupilSizeData.map(size => {
-          const change = ((size - baselineSize) / baselineSize) * 100
-          return change
+        // Remove outliers from baseline calculation
+        const baselineValues = pupilSizeData.slice(0, baselineFrames)
+        const baselineMedian = [...baselineValues].sort((a, b) => a - b)[Math.floor(baselineValues.length / 2)]
+        const filteredBaseline = baselineValues.filter(v => Math.abs(v - baselineMedian) < 10)
+        const robustBaseline = filteredBaseline.length > 0 
+          ? filteredBaseline.reduce((a, b) => a + b, 0) / filteredBaseline.length
+          : baselineSize
+        
+        // Track dilation changes with smoothing
+        const smoothedPupilData: number[] = []
+        for (let i = 0; i < pupilSizeData.length; i++) {
+          const prev = i > 0 ? pupilSizeData[i - 1] : pupilSizeData[i]
+          const curr = pupilSizeData[i]
+          const next = i < pupilSizeData.length - 1 ? pupilSizeData[i + 1] : pupilSizeData[i]
+          smoothedPupilData.push((prev * 0.25 + curr * 0.5 + next * 0.25))
+        }
+        
+        // Calculate percentage change from baseline
+        pupilDilationData = smoothedPupilData.map(size => {
+          if (robustBaseline > 0) {
+            const change = ((size - robustBaseline) / robustBaseline) * 100
+            return change
+          }
+          return 0
         })
       }
     }
@@ -580,32 +759,84 @@ export default function NeuroPulsePage() {
       attentionScore = Math.min(100, attentionScore)
     }
     
-    // Detect micro-expressions (rapid small movements)
+    // Enhanced micro-expression detection with pattern analysis
     let microExpressions = 0
+    let facialTwitches = 0
+    let eyeMovements = 0
+    
     if (movementData.length > 5) {
+      // Detect rapid small movements (micro-expressions)
       for (let i = 2; i < movementData.length - 2; i++) {
         const localVariance = Math.abs(movementData[i] - movementData[i - 1]) + 
                              Math.abs(movementData[i] - movementData[i + 1])
-        if (localVariance > 10 && movementData[i] < 30) {
+        const avgLocalMovement = (movementData[i - 1] + movementData[i] + movementData[i + 1]) / 3
+        
+        // Micro-expression: small but rapid change in low-movement state
+        if (localVariance > 12 && avgLocalMovement < 35 && movementData[i] < 40) {
           microExpressions++
         }
+        
+        // Facial twitch: very rapid spike in movement
+        if (movementData[i] > movementData[i - 1] * 2 && 
+            movementData[i] > movementData[i + 1] * 1.5 &&
+            movementData[i] > 15 && movementData[i] < 50) {
+          facialTwitches++
+        }
+      }
+      
+      // Detect eye movements (smaller, more frequent movements)
+      if (movementData.length > 10) {
+        // Look for patterns of small oscillations (eye movements)
+        let oscillationCount = 0
+        for (let i = 3; i < movementData.length - 3; i++) {
+          const pattern = [
+            movementData[i - 3],
+            movementData[i - 2],
+            movementData[i - 1],
+            movementData[i],
+            movementData[i + 1],
+            movementData[i + 2],
+            movementData[i + 3]
+          ]
+          
+          // Check for oscillating pattern (up-down-up or down-up-down)
+          const isOscillating = 
+            (pattern[1] < pattern[2] && pattern[2] > pattern[3] && pattern[3] < pattern[4]) ||
+            (pattern[1] > pattern[2] && pattern[2] < pattern[3] && pattern[3] > pattern[4])
+          
+          if (isOscillating && pattern[3] > 5 && pattern[3] < 25) {
+            oscillationCount++
+          }
+        }
+        eyeMovements = Math.floor(oscillationCount / 3) // Group oscillations
       }
     }
     
-    // For flash test, count micro-movements during flash response
+    // For flash test, enhanced micro-movement detection during flash response
     if (isFlashTest && timestamps.length > 0) {
       // Look for rapid small movements during flash response period
-      const flashResponseWindow = 500 // 500ms after flash
+      const flashResponseWindow = 600 // 600ms after flash (extended window)
       for (let i = 1; i < movementData.length && i < timestamps.length; i++) {
         const timeSinceStart = timestamps[i] - timestamps[0]
         if (timeSinceStart < flashResponseWindow) {
           const movementChange = Math.abs(movementData[i] - movementData[i - 1])
-          if (movementChange > 5 && movementChange < 20) { // Small but noticeable movements
+          const movementAccel = i > 1 ? Math.abs(movementChange - Math.abs(movementData[i - 1] - movementData[i - 2])) : 0
+          
+          // Small but noticeable movements (micro-expressions from flash response)
+          if (movementChange > 6 && movementChange < 25 && movementData[i] < 35) {
             microExpressions++
+          }
+          
+          // Rapid acceleration (startle response to flash)
+          if (movementAccel > 8 && movementChange > 10) {
+            microExpressions += 0.5 // Partial count for rapid responses
           }
         }
       }
     }
+    
+    // Combine micro-expressions with facial twitches and eye movements
+    const totalMicroExpressions = Math.round(microExpressions + (facialTwitches * 0.5) + (eyeMovements * 0.3))
     
     return {
       totalFrames: frames.length,
@@ -616,30 +847,74 @@ export default function NeuroPulsePage() {
       eyeClosureDuration,
       headMovement,
       attentionScore: Math.round(attentionScore),
-      microExpressions
+      microExpressions: totalMicroExpressions
     }
   }
 
-  // Calculate movement index by comparing two frames
+  // Enhanced movement index calculation with weighted regions and edge detection
   const calculateMovementIndex = (frame1: ImageData, frame2: ImageData): number => {
     if (!frame1 || !frame2 || frame1.data.length !== frame2.data.length) return 0
     
-    let totalDiff = 0
     const data1 = frame1.data
     const data2 = frame2.data
+    const width = frame1.width
+    const height = frame1.height
     
-    // Sample every 4th pixel for performance (RGBA = 4 values per pixel)
-    for (let i = 0; i < data1.length; i += 16) {
-      const diff = Math.abs(data1[i] - data2[i]) + 
-                   Math.abs(data1[i + 1] - data2[i + 1]) + 
-                   Math.abs(data1[i + 2] - data2[i + 2])
-      totalDiff += diff
+    let totalDiff = 0
+    let weightedDiff = 0
+    let edgeMovement = 0
+    let sampleCount = 0
+    
+    // Enhanced sampling: focus more on center region (face area) and detect edges
+    for (let y = 0; y < height; y += 4) {
+      for (let x = 0; x < width; x += 4) {
+        const idx = (y * width + x) * 4
+        if (idx >= data1.length - 3) continue
+        
+        // Calculate pixel difference
+        const rDiff = Math.abs(data1[idx] - data2[idx])
+        const gDiff = Math.abs(data1[idx + 1] - data2[idx + 1])
+        const bDiff = Math.abs(data1[idx + 2] - data2[idx + 2])
+        const pixelDiff = rDiff + gDiff + bDiff
+        
+        // Weight center region more heavily (face is typically centered)
+        const centerX = width / 2
+        const centerY = height / 2
+        const distFromCenter = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2))
+        const maxDist = Math.sqrt(Math.pow(centerX, 2) + Math.pow(centerY, 2))
+        const centerWeight = 1.0 + (1.0 - (distFromCenter / maxDist)) * 0.5 // 1.0 to 1.5 weight
+        
+        totalDiff += pixelDiff
+        weightedDiff += pixelDiff * centerWeight
+        sampleCount++
+        
+        // Edge detection: check if this pixel is on an edge (high gradient)
+        if (x > 0 && y > 0 && x < width - 1 && y < height - 1) {
+          const idxRight = ((y * width) + (x + 1)) * 4
+          const idxDown = (((y + 1) * width) + x) * 4
+          
+          const edge1 = Math.abs(data1[idx] - data1[idxRight]) + 
+                       Math.abs(data1[idx + 1] - data1[idxRight + 1]) +
+                       Math.abs(data1[idx + 2] - data1[idxRight + 2])
+          const edge2 = Math.abs(data1[idx] - data1[idxDown]) + 
+                       Math.abs(data1[idx + 1] - data1[idxDown + 1]) +
+                       Math.abs(data1[idx + 2] - data1[idxDown + 2])
+          
+          // If pixel is on an edge and moved, it's more significant
+          if ((edge1 > 30 || edge2 > 30) && pixelDiff > 20) {
+            edgeMovement += pixelDiff * 1.2
+          }
+        }
+      }
     }
     
-    // Normalize to 0-100 scale
-    const pixels = data1.length / 16
-    const avgDiff = totalDiff / pixels
-    return Math.min(Math.round((avgDiff / 765) * 100), 100)
+    // Combine weighted average with edge movement
+    const avgDiff = sampleCount > 0 ? weightedDiff / sampleCount : 0
+    const edgeContribution = sampleCount > 0 ? edgeMovement / sampleCount : 0
+    const combinedDiff = (avgDiff * 0.7) + (edgeContribution * 0.3)
+    
+    // Normalize to 0-100 scale (765 is max RGB difference)
+    return Math.min(Math.round((combinedDiff / 765) * 100), 100)
   }
 
   // Calculate NeuroScore from reaction time and movement
