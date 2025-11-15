@@ -10,6 +10,16 @@ export const metadata: Metadata = {
   title: 'NeuroPulse - Cognitive Alertness Test',
   description: 'Quick fatigue screening for commercial drivers using reaction time and facial movement analysis',
   generator: 'v0.app',
+  viewport: {
+    width: 'device-width',
+    initialScale: 1,
+    maximumScale: 5,
+    userScalable: true,
+  },
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
+    { media: '(prefers-color-scheme: dark)', color: '#000000' },
+  ],
   icons: {
     icon: [
       {

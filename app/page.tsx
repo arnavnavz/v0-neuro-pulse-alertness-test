@@ -1253,43 +1253,43 @@ export default function NeuroPulsePage() {
 
   return (
     <TooltipProvider delayDuration={200} skipDelayDuration={0}>
-    <main className="min-h-screen bg-background p-4">
-      <div className="text-center space-y-2 mb-6">
-        <div className="flex items-center justify-center gap-3 mb-2">
-          <Activity className="w-8 h-8 text-primary" />
-          <h1 className="text-4xl font-bold tracking-tight text-balance">NeuroPulse</h1>
+    <main className="min-h-screen bg-background p-3 sm:p-4">
+      <div className="text-center space-y-2 mb-4 sm:mb-6">
+        <div className="flex items-center justify-center gap-2 sm:gap-3 mb-2">
+          <Activity className="w-6 h-6 sm:w-8 sm:h-8 text-primary" />
+          <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-balance">NeuroPulse</h1>
         </div>
-        <p className="text-muted-foreground text-base">
+        <p className="text-muted-foreground text-sm sm:text-base">
           Fatigue Screening for Commercial Drivers
         </p>
       </div>
 
-      <div className="max-w-2xl mx-auto space-y-4">
+      <div className="max-w-2xl mx-auto space-y-3 sm:space-y-4">
         {/* Navigation Tabs */}
-        <Card className="p-2 bg-card border-medical">
-          <div className="grid grid-cols-3 gap-2">
+        <Card className="p-1.5 sm:p-2 bg-card border-medical">
+          <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
             <Button
               variant={viewMode === 'test' ? 'default' : 'outline'}
               onClick={() => setViewMode('test')}
-              className="h-auto py-2 flex flex-col items-center gap-1"
+              className="h-auto py-2.5 sm:py-2 min-h-[44px] flex flex-col items-center gap-1 touch-manipulation"
             >
-              <Activity className="w-4 h-4" />
+              <Activity className="w-4 h-4 sm:w-4 sm:h-4" />
               <span className="text-xs font-medium">Test</span>
             </Button>
             <Button
               variant={viewMode === 'history' ? 'default' : 'outline'}
               onClick={() => setViewMode('history')}
-              className="h-auto py-2 flex flex-col items-center gap-1"
+              className="h-auto py-2.5 sm:py-2 min-h-[44px] flex flex-col items-center gap-1 touch-manipulation"
             >
-              <History className="w-4 h-4" />
+              <History className="w-4 h-4 sm:w-4 sm:h-4" />
               <span className="text-xs font-medium">History</span>
             </Button>
             <Button
               variant={viewMode === 'analytics' ? 'default' : 'outline'}
               onClick={() => setViewMode('analytics')}
-              className="h-auto py-2 flex flex-col items-center gap-1"
+              className="h-auto py-2.5 sm:py-2 min-h-[44px] flex flex-col items-center gap-1 touch-manipulation"
             >
-              <TrendingUp className="w-4 h-4" />
+              <TrendingUp className="w-4 h-4 sm:w-4 sm:h-4" />
               <span className="text-xs font-medium">Analytics</span>
             </Button>
           </div>
@@ -1298,9 +1298,9 @@ export default function NeuroPulsePage() {
         {/* History View */}
         {viewMode === 'history' && (
           <div className="space-y-4">
-            <Card className="p-4 bg-card border-medical">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold">Test History</h2>
+            <Card className="p-3 sm:p-4 bg-card border-medical">
+              <div className="flex items-center justify-between mb-3 sm:mb-4">
+                <h2 className="text-base sm:text-lg font-semibold">Test History</h2>
                 {testHistory.length > 0 && (
                   <Button
                     variant="outline"
@@ -1353,7 +1353,7 @@ export default function NeuroPulsePage() {
                                   <span className="font-semibold text-lg">{test.combinedScore}</span>
                                 </div>
                               </div>
-                              <div className="grid grid-cols-3 gap-2 text-xs">
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
                                 <div className="bg-secondary/50 p-2 rounded">
                                   <p className="font-medium mb-1">Simple Test</p>
                                   <p className="text-muted-foreground">Score: <span className="font-semibold">{test.results.simple.neuroScore}</span></p>
@@ -1401,8 +1401,8 @@ export default function NeuroPulsePage() {
 
             {/* Comparison View */}
             {selectedTests.length > 0 && (
-              <Card className="p-4 bg-card border-medical">
-                <h2 className="text-lg font-semibold mb-4">
+              <Card className="p-3 sm:p-4 bg-card border-medical">
+                <h2 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4">
                   Comparison ({selectedTests.length} selected)
                 </h2>
                 <div className="space-y-4">
@@ -1410,14 +1410,14 @@ export default function NeuroPulsePage() {
                     const test = testHistory.find(t => t.id === testId)
                     if (!test) return null
                     return (
-                      <div key={testId} className="border rounded-lg p-4 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-semibold">
+                      <div key={testId} className="border rounded-lg p-3 sm:p-4 space-y-3">
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                          <span className="text-xs sm:text-sm font-semibold">
                             Session - {format(new Date(test.timestamp), 'MMM d, h:mm a')}
                           </span>
-                          <span className="text-lg font-bold">Combined Score: {test.combinedScore}</span>
+                          <span className="text-base sm:text-lg font-bold">Combined Score: {test.combinedScore}</span>
                         </div>
-                        <div className="grid grid-cols-3 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                           {/* Simple Test */}
                           <div className="space-y-2">
                             <p className="text-xs font-semibold">Simple Test</p>
@@ -1501,9 +1501,9 @@ export default function NeuroPulsePage() {
               <>
                 {/* Summary Statistics */}
                 {summaryStats && (
-                  <Card className="p-4 bg-card border-medical">
-                    <h2 className="text-lg font-semibold mb-4">Performance Summary</h2>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <Card className="p-3 sm:p-4 bg-card border-medical">
+                    <h2 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4">Performance Summary</h2>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
                       <div className="bg-secondary/50 p-3 rounded-lg text-center">
                         <div className="flex items-center justify-center gap-1 mb-1">
                           <p className="text-xs text-muted-foreground">Total Sessions</p>
@@ -1569,7 +1569,7 @@ export default function NeuroPulsePage() {
                         <p className="text-2xl font-bold text-destructive">{summaryStats.worstScore}</p>
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3 mt-3">
                       <div className="bg-secondary/50 p-3 rounded-lg text-center">
                         <div className="flex items-center justify-center gap-1 mb-1">
                           <p className="text-xs text-muted-foreground">Avg Simple RT</p>
@@ -1640,10 +1640,10 @@ export default function NeuroPulsePage() {
                 )}
 
                 {/* GPT-Powered Analytics Insights */}
-                <Card className="p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-4">
-                    <Brain className="w-5 h-5 text-primary" />
-                    <h2 className="text-lg font-semibold">AI-Powered Trend Analysis</h2>
+                <Card className="p-3 sm:p-4 bg-card border-medical">
+                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                    <Brain className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
+                    <h2 className="text-base sm:text-lg font-semibold">AI-Powered Trend Analysis</h2>
                   </div>
                   <div className="space-y-4">
                     <p className="text-sm text-foreground leading-relaxed">
@@ -1701,9 +1701,9 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Score Trend */}
-                <Card className="p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-4">
-                    <h2 className="text-lg font-semibold">Score Trend Over Time</h2>
+                <Card className="p-3 sm:p-4 bg-card border-medical">
+                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                    <h2 className="text-base sm:text-lg font-semibold">Score Trend Over Time</h2>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button type="button" className="inline-flex items-center">
@@ -1715,7 +1715,7 @@ export default function NeuroPulsePage() {
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  <ResponsiveContainer width="100%" height={250}>
+                  <ResponsiveContainer width="100%" height={200}>
                     <AreaChart data={testHistory.slice().reverse().map(test => ({
                       date: format(new Date(test.timestamp), 'MMM d'),
                       time: format(new Date(test.timestamp), 'h:mm a'),
@@ -1732,9 +1732,9 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Individual Test Scores Comparison */}
-                <Card className="p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-4">
-                    <h2 className="text-lg font-semibold">Individual Test Scores Over Time</h2>
+                <Card className="p-3 sm:p-4 bg-card border-medical">
+                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                    <h2 className="text-base sm:text-lg font-semibold">Individual Test Scores Over Time</h2>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button type="button" className="inline-flex items-center">
@@ -1746,7 +1746,7 @@ export default function NeuroPulsePage() {
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  <ResponsiveContainer width="100%" height={250}>
+                  <ResponsiveContainer width="100%" height={200}>
                     <LineChart data={testHistory.slice().reverse().map(test => ({
                       date: format(new Date(test.timestamp), 'MMM d'),
                       time: format(new Date(test.timestamp), 'h:mm a'),
@@ -1767,9 +1767,9 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Reaction Time Trend */}
-                <Card className="p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-4">
-                    <h2 className="text-lg font-semibold">Average Reaction Time Trend</h2>
+                <Card className="p-3 sm:p-4 bg-card border-medical">
+                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                    <h2 className="text-base sm:text-lg font-semibold">Average Reaction Time Trend</h2>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button type="button" className="inline-flex items-center">
@@ -1781,7 +1781,7 @@ export default function NeuroPulsePage() {
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  <ResponsiveContainer width="100%" height={250}>
+                  <ResponsiveContainer width="100%" height={200}>
                     <LineChart data={testHistory.slice().reverse().map(test => ({
                       date: format(new Date(test.timestamp), 'MMM d'),
                       time: format(new Date(test.timestamp), 'h:mm a'),
@@ -1802,9 +1802,9 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Variability Trend */}
-                <Card className="p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-4">
-                    <h2 className="text-lg font-semibold">Reaction Time Variability Trend</h2>
+                <Card className="p-3 sm:p-4 bg-card border-medical">
+                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                    <h2 className="text-base sm:text-lg font-semibold">Reaction Time Variability Trend</h2>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button type="button" className="inline-flex items-center">
@@ -1816,7 +1816,7 @@ export default function NeuroPulsePage() {
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  <ResponsiveContainer width="100%" height={250}>
+                  <ResponsiveContainer width="100%" height={200}>
                     <LineChart data={testHistory.slice().reverse().map(test => ({
                       date: format(new Date(test.timestamp), 'MMM d'),
                       time: format(new Date(test.timestamp), 'h:mm a'),
@@ -1837,9 +1837,9 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Lapses Trend */}
-                <Card className="p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-4">
-                    <h2 className="text-lg font-semibold">Lapses Over Time</h2>
+                <Card className="p-3 sm:p-4 bg-card border-medical">
+                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                    <h2 className="text-base sm:text-lg font-semibold">Lapses Over Time</h2>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button type="button" className="inline-flex items-center">
@@ -1851,7 +1851,7 @@ export default function NeuroPulsePage() {
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  <ResponsiveContainer width="100%" height={250}>
+                  <ResponsiveContainer width="100%" height={200}>
                     <BarChart data={testHistory.slice().reverse().map(test => ({
                       date: format(new Date(test.timestamp), 'MMM d'),
                       time: format(new Date(test.timestamp), 'h:mm a'),
@@ -1873,9 +1873,9 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Error Rate Trend */}
-                <Card className="p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-4">
-                    <h2 className="text-lg font-semibold">Error Rate Over Time</h2>
+                <Card className="p-3 sm:p-4 bg-card border-medical">
+                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                    <h2 className="text-base sm:text-lg font-semibold">Error Rate Over Time</h2>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button type="button" className="inline-flex items-center">
@@ -1887,7 +1887,7 @@ export default function NeuroPulsePage() {
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  <ResponsiveContainer width="100%" height={250}>
+                  <ResponsiveContainer width="100%" height={200}>
                     <LineChart data={testHistory.slice().reverse().map(test => ({
                       date: format(new Date(test.timestamp), 'MMM d'),
                       time: format(new Date(test.timestamp), 'h:mm a'),
@@ -1908,9 +1908,9 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* False Starts Trend */}
-                <Card className="p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-4">
-                    <h2 className="text-lg font-semibold">False Starts Over Time</h2>
+                <Card className="p-3 sm:p-4 bg-card border-medical">
+                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                    <h2 className="text-base sm:text-lg font-semibold">False Starts Over Time</h2>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button type="button" className="inline-flex items-center">
@@ -1922,7 +1922,7 @@ export default function NeuroPulsePage() {
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  <ResponsiveContainer width="100%" height={250}>
+                  <ResponsiveContainer width="100%" height={200}>
                     <BarChart data={testHistory.slice().reverse().map(test => ({
                       date: format(new Date(test.timestamp), 'MMM d'),
                       time: format(new Date(test.timestamp), 'h:mm a'),
@@ -1943,9 +1943,9 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Performance Distribution */}
-                <Card className="p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-4">
-                    <h2 className="text-lg font-semibold">Score Distribution</h2>
+                <Card className="p-3 sm:p-4 bg-card border-medical">
+                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                    <h2 className="text-base sm:text-lg font-semibold">Score Distribution</h2>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button type="button" className="inline-flex items-center">
@@ -1957,7 +1957,7 @@ export default function NeuroPulsePage() {
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  <ResponsiveContainer width="100%" height={250}>
+                  <ResponsiveContainer width="100%" height={200}>
                     <BarChart data={(() => {
                       const ranges = [
                         { range: '0-49', label: 'Fatigue', count: 0 },
@@ -1989,11 +1989,11 @@ export default function NeuroPulsePage() {
         {viewMode === 'test' && (
           <>
         {testState === 'flashInstruction' && (
-          <Card className="p-6 space-y-4 bg-card border-medical">
+          <Card className="p-4 sm:p-6 space-y-3 sm:space-y-4 bg-card border-medical">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Eye className="w-6 h-6 text-primary" />
-                <h2 className="text-xl font-bold">Flash Test Instructions</h2>
+                <Eye className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
+                <h2 className="text-lg sm:text-xl font-bold">Flash Test Instructions</h2>
               </div>
               <Button 
                 variant="ghost" 
@@ -2105,7 +2105,7 @@ export default function NeuroPulsePage() {
 
         {/* Camera Feed & Test Controls */}
         {testState !== 'flashInstruction' && testState !== 'flashActive' && (
-          <Card className="p-4 space-y-4 bg-card border-medical">
+          <Card className="p-3 sm:p-4 space-y-3 sm:space-y-4 bg-card border-medical">
             {/* Webcam Preview */}
             <div className="relative">
               <div className="flex items-center gap-2 mb-2">
@@ -2180,14 +2180,14 @@ export default function NeuroPulsePage() {
 
             <div>
               <h3 className="text-sm font-semibold mb-2">Test Mode</h3>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
                 <Button
                   variant={testMode === 'simple' ? 'default' : 'outline'}
                   onClick={() => {
                     setTestMode('simple')
                     setTestState('idle')
                   }}
-                  className="h-auto py-3 flex flex-col items-center gap-1"
+                  className="h-auto py-3 sm:py-3 min-h-[60px] flex flex-col items-center gap-1 touch-manipulation"
                   disabled={(testState !== 'idle' && testState !== 'results') || (sessionInProgress && currentSession.simple !== null)}
                 >
                   <Activity className="w-5 h-5" />
@@ -2200,7 +2200,7 @@ export default function NeuroPulsePage() {
                     setTestMode('dotgrid')
                     setTestState('idle')
                   }}
-                  className="h-auto py-3 flex flex-col items-center gap-1"
+                  className="h-auto py-3 sm:py-3 min-h-[60px] flex flex-col items-center gap-1 touch-manipulation"
                   disabled={(testState !== 'idle' && testState !== 'results') || (sessionInProgress && currentSession.dotgrid !== null)}
                 >
                   <Brain className="w-5 h-5" />
@@ -2213,7 +2213,7 @@ export default function NeuroPulsePage() {
                     setTestMode('flash')
                     setTestState('idle')
                   }}
-                  className="h-auto py-3 flex flex-col items-center gap-1"
+                  className="h-auto py-3 sm:py-3 min-h-[60px] flex flex-col items-center gap-1 touch-manipulation"
                   disabled={(testState !== 'idle' && testState !== 'results') || (sessionInProgress && currentSession.flash !== null)}
                 >
                   <Zap className="w-5 h-5" />
@@ -2237,7 +2237,7 @@ export default function NeuroPulsePage() {
                   <Button 
                     onClick={startTest} 
                     size="lg"
-                    className="w-full text-base h-16 bg-primary hover:bg-primary/90 font-semibold"
+                    className="w-full text-base h-14 sm:h-16 bg-primary hover:bg-primary/90 font-semibold touch-manipulation"
                     disabled={!stream || (testMode === 'flash' && !isMobile)}
                   >
                     {testMode === 'flash' && !isMobile ? 'Mobile Only' : 'Start Test'}
@@ -2255,10 +2255,10 @@ export default function NeuroPulsePage() {
 
               {testState === 'flash' && testMode === 'simple' && (
                 <div 
-                  className="text-center py-16 cursor-pointer bg-accent rounded-lg active:bg-accent/80 transition-colors"
+                  className="text-center py-12 sm:py-16 cursor-pointer bg-accent rounded-lg active:bg-accent/80 transition-colors touch-manipulation min-h-[200px] flex flex-col items-center justify-center"
                   onClick={handleReaction}
                 >
-                  <p className="text-6xl font-bold text-accent-foreground animate-pulse">
+                  <p className="text-5xl sm:text-6xl font-bold text-accent-foreground animate-pulse">
                     GO!
                   </p>
                   <p className="text-sm text-muted-foreground mt-4">
@@ -2268,14 +2268,14 @@ export default function NeuroPulsePage() {
               )}
 
               {testState === 'flash' && testMode === 'dotgrid' && (
-                <div className="relative bg-secondary rounded-lg border-2 border-border h-96">
+                <div className="relative bg-secondary rounded-lg border-2 border-border h-80 sm:h-96">
                   <div className="absolute top-2 left-3 text-sm font-semibold text-foreground">
                     Round {dotRound}/10
                   </div>
                   {currentDot && (
                     <button
                       onClick={handleDotClick}
-                      className="absolute w-16 h-16 bg-primary rounded-full active:scale-110 transition-transform cursor-pointer shadow-lg"
+                      className="absolute w-16 h-16 sm:w-16 sm:h-16 bg-primary rounded-full active:scale-110 transition-transform cursor-pointer shadow-lg touch-manipulation min-w-[64px] min-h-[64px]"
                       style={{
                         left: `${currentDot.x}%`,
                         top: `${currentDot.y}%`,
@@ -2298,10 +2298,10 @@ export default function NeuroPulsePage() {
                         ? `Session Progress: ${[currentSession.simple, currentSession.dotgrid].filter(Boolean).length}/2 Required`
                         : 'NeuroScore'}
                     </p>
-                    <p className="text-5xl font-bold text-foreground mb-2">
+                    <p className="text-4xl sm:text-5xl font-bold text-foreground mb-2">
                       {calculateCombinedNeuroScore()}
                     </p>
-                    <p className={`text-lg font-semibold ${
+                    <p className={`text-base sm:text-lg font-semibold ${
                       calculateCombinedNeuroScore() >= 75 ? 'text-success' :
                       calculateCombinedNeuroScore() >= 50 ? 'text-primary' : 
                       'text-destructive'
@@ -2317,16 +2317,16 @@ export default function NeuroPulsePage() {
                   </div>
 
                   {testMode === 'simple' && results && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-secondary p-3 rounded-lg text-center">
+                    <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                      <div className="bg-secondary p-2 sm:p-3 rounded-lg text-center">
                         <p className="text-xs text-muted-foreground mb-1">Reaction Time</p>
-                        <p className="text-2xl font-bold text-foreground">
-                          {results.reactionTime}<span className="text-sm">ms</span>
+                        <p className="text-xl sm:text-2xl font-bold text-foreground">
+                          {results.reactionTime}<span className="text-xs sm:text-sm">ms</span>
                         </p>
                       </div>
-                      <div className="bg-secondary p-3 rounded-lg text-center">
+                      <div className="bg-secondary p-2 sm:p-3 rounded-lg text-center">
                         <p className="text-xs text-muted-foreground mb-1">Movement Index</p>
-                        <p className="text-2xl font-bold text-foreground">
+                        <p className="text-xl sm:text-2xl font-bold text-foreground">
                           {results.movementIndex}
                         </p>
                       </div>
@@ -2334,7 +2334,7 @@ export default function NeuroPulsePage() {
                   )}
 
                   {testMode === 'dotgrid' && dotGridResults && (
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
                       <div className="bg-secondary p-3 rounded-lg text-center">
                         <p className="text-xs text-muted-foreground mb-1">Avg Time</p>
                         <p className="text-xl font-bold text-foreground">
@@ -2358,7 +2358,7 @@ export default function NeuroPulsePage() {
 
                   {testMode === 'flash' && flashTestResults && (
                     <div className="space-y-2">
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
                         <div className="bg-secondary p-3 rounded-lg text-center">
                           <p className="text-xs text-muted-foreground mb-1">Pupil Response</p>
                           <p className="text-xl font-bold text-foreground">
@@ -3085,7 +3085,7 @@ export default function NeuroPulsePage() {
                           }
                         }}
                         size="lg"
-                        className="w-full h-14 text-base bg-primary hover:bg-primary/90"
+                        className="w-full h-14 text-base bg-primary hover:bg-primary/90 touch-manipulation"
                       >
                         Continue to {getNextTest() === 'simple' ? 'Simple Test' : getNextTest() === 'dotgrid' ? 'Dot Grid Test' : 'Flash Test'}
                       </Button>
@@ -3096,7 +3096,7 @@ export default function NeuroPulsePage() {
                           checkAndSaveSession()
                         }}
                         size="lg"
-                        className="w-full h-14 text-base bg-success hover:bg-success/90"
+                        className="w-full h-14 text-base bg-success hover:bg-success/90 touch-manipulation"
                       >
                         Save Session to History
                         {!currentSession.flash && !isMobile && ' (Flash skipped)'}
@@ -3106,7 +3106,7 @@ export default function NeuroPulsePage() {
                       <Button 
                         onClick={startNewSession}
                         size="lg"
-                        className="w-full h-14 text-base bg-primary hover:bg-primary/90"
+                        className="w-full h-14 text-base bg-primary hover:bg-primary/90 touch-manipulation"
                       >
                         Start New Session
                       </Button>
@@ -3115,7 +3115,7 @@ export default function NeuroPulsePage() {
                       onClick={runAgain} 
                       variant="outline"
                       size="lg"
-                      className="w-full h-14 text-base"
+                      className="w-full h-14 text-base touch-manipulation"
                     >
                       {sessionInProgress ? 'Retry This Test' : 'Run Again'}
                     </Button>
@@ -3128,10 +3128,10 @@ export default function NeuroPulsePage() {
 
         {/* AI Report Card - Only show in test view */}
         {viewMode === 'test' && (
-          <Card className="p-4 space-y-3 bg-card border-medical">
+          <Card className="p-3 sm:p-4 space-y-3 bg-card border-medical">
           <div className="flex items-center gap-2 mb-1">
             <Brain className="w-4 h-4 text-primary" />
-            <h2 className="text-base font-semibold text-foreground">AI Driver Report</h2>
+            <h2 className="text-sm sm:text-base font-semibold text-foreground">AI Driver Report</h2>
           </div>
 
           <div className="space-y-3">
