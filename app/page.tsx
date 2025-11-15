@@ -2673,13 +2673,9 @@ export default function NeuroPulsePage() {
 
             {!sessionInProgress && (
               <div className="text-center py-4">
-                <Button
-                  onClick={startNewSession}
-                  size="lg"
-                  className="w-full bg-primary hover:bg-primary/90"
-                >
+                <p className="text-base text-foreground mb-2">
                   Start New Test Session
-                </Button>
+                </p>
                 <p className="text-xs text-muted-foreground mt-2">
                   Complete all 3 tests to generate report (Flash test requires mobile device)
                 </p>
@@ -3635,13 +3631,9 @@ export default function NeuroPulsePage() {
                       </Button>
                     )}
                     {!sessionInProgress && (
-                      <Button 
-                        onClick={startNewSession}
-                        size="lg"
-                        className="w-full h-14 text-base bg-primary hover:bg-primary/90 touch-manipulation"
-                      >
+                      <p className="text-base text-foreground text-center py-2">
                         Start New Session
-                      </Button>
+                      </p>
                     )}
                   <Button 
                     onClick={runAgain} 
