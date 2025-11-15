@@ -115,6 +115,8 @@ export default function NeuroPulsePage() {
     movementData: number[]
   } | null>(null)
   const frameAnalysisIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const reportCardRef = useRef<HTMLDivElement>(null)
+  const previousCanSaveSessionRef = useRef<boolean>(false)
 
   useEffect(() => {
     const checkMobile = () => {
@@ -662,8 +664,8 @@ export default function NeuroPulsePage() {
     if (dotGridScore !== undefined) scores.push(dotGridScore)
     if (flashScore !== undefined) scores.push(flashScore)
     
-    // Need at least Simple and Dot Grid for a valid combined score
-    if (scores.length < 2) return 0
+    // Need all 3 tests for a valid combined score
+    if (scores.length < 3) return 0
     return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
   }
 
@@ -830,13 +832,13 @@ export default function NeuroPulsePage() {
     setCurrentSession(updatedSession)
     setSessionInProgress(true)
     
-    // Check if session is complete and save (Simple + Dot Grid required, Flash optional)
-    if (updatedSession.simple && updatedSession.dotgrid) {
+    // Check if session is complete and save (all 3 tests required)
+    if (updatedSession.simple && updatedSession.dotgrid && updatedSession.flash) {
       const combinedScore = calculateCombinedNeuroScore()
       storage.saveTestSession({
         simple: updatedSession.simple,
         dotgrid: updatedSession.dotgrid,
-        flash: updatedSession.flash || undefined
+        flash: updatedSession.flash
       }, combinedScore)
       setTestHistory(storage.getTestHistory())
       setSessionInProgress(false)
@@ -931,13 +933,13 @@ export default function NeuroPulsePage() {
     setCurrentSession(updatedSession)
     setSessionInProgress(true)
     
-    // Check if session is complete and save (Simple + Dot Grid required, Flash optional)
-    if (updatedSession.simple && updatedSession.dotgrid) {
+    // Check if session is complete and save (all 3 tests required)
+    if (updatedSession.simple && updatedSession.dotgrid && updatedSession.flash) {
       const combinedScore = calculateCombinedNeuroScore()
       storage.saveTestSession({
         simple: updatedSession.simple,
         dotgrid: updatedSession.dotgrid,
-        flash: updatedSession.flash || undefined
+        flash: updatedSession.flash
       }, combinedScore)
       setTestHistory(storage.getTestHistory())
       setSessionInProgress(false)
@@ -989,8 +991,8 @@ export default function NeuroPulsePage() {
         // Wait for video to be ready before capturing
         const isReady = await waitForVideoReady()
         if (isReady) {
-          // Capture "before" frame
-          beforeFrameRef.current = captureFrame()
+        // Capture "before" frame
+        beforeFrameRef.current = captureFrame()
         } else {
           console.warn('Video not ready, capturing frame anyway')
           beforeFrameRef.current = captureFrame()
@@ -1055,13 +1057,13 @@ export default function NeuroPulsePage() {
     setCurrentSession(updatedSession)
     setSessionInProgress(true)
     
-    // Check if session is complete and save (Simple + Dot Grid required, Flash optional)
-    if (updatedSession.simple && updatedSession.dotgrid) {
+    // Check if session is complete and save (all 3 tests required)
+    if (updatedSession.simple && updatedSession.dotgrid && updatedSession.flash) {
       const combinedScore = calculateCombinedNeuroScore()
       storage.saveTestSession({
         simple: updatedSession.simple,
         dotgrid: updatedSession.dotgrid,
-        flash: updatedSession.flash || undefined
+        flash: updatedSession.flash
       }, combinedScore)
       setTestHistory(storage.getTestHistory())
       setSessionInProgress(false)
@@ -1070,14 +1072,14 @@ export default function NeuroPulsePage() {
     setTestState('results')
   }
   
-  // Function to check and save session if complete (Simple + Dot Grid required, Flash optional)
+  // Function to check and save session if complete (all 3 tests required)
   const checkAndSaveSession = () => {
-    if (currentSession.simple && currentSession.dotgrid) {
+    if (currentSession.simple && currentSession.dotgrid && currentSession.flash) {
       const combinedScore = calculateCombinedNeuroScore()
       storage.saveTestSession({
         simple: currentSession.simple,
         dotgrid: currentSession.dotgrid,
-        flash: currentSession.flash || undefined
+        flash: currentSession.flash
       }, combinedScore)
       setTestHistory(storage.getTestHistory())
       setSessionInProgress(false)
@@ -1116,18 +1118,17 @@ export default function NeuroPulsePage() {
     setTestState('idle')
   }
   
-  // Get next test to complete (Flash is optional)
+  // Get next test to complete (all 3 tests required)
   const getNextTest = (): TestMode | null => {
     if (!currentSession.simple) return 'simple'
     if (!currentSession.dotgrid) return 'dotgrid'
-    // Flash is optional - only suggest if mobile and not completed
-    if (!currentSession.flash && isMobile) return 'flash'
+    if (!currentSession.flash) return 'flash'
     return null
   }
   
-  // Check if session can be saved (Simple + Dot Grid required)
+  // Check if session can be saved (all 3 tests required)
   const canSaveSession = (): boolean => {
-    return currentSession.simple !== null && currentSession.dotgrid !== null
+    return currentSession.simple !== null && currentSession.dotgrid !== null && currentSession.flash !== null
   }
 
   useEffect(() => {
@@ -1150,6 +1151,22 @@ export default function NeuroPulsePage() {
       }
     }
   }, [])
+
+  // Auto-scroll to report when all tests are completed
+  useEffect(() => {
+    const canSave = canSaveSession()
+    // Only scroll if we just completed all tests (transition from false to true)
+    if (canSave && !previousCanSaveSessionRef.current && reportCardRef.current) {
+      // Small delay to ensure the report card is rendered
+      setTimeout(() => {
+        reportCardRef.current?.scrollIntoView({ 
+          behavior: 'smooth', 
+          block: 'start' 
+        })
+      }, 300)
+    }
+    previousCanSaveSessionRef.current = canSave
+  }, [currentSession.simple, currentSession.dotgrid, currentSession.flash])
 
   const generateAIInsights = () => {
     const combinedScore = calculateCombinedNeuroScore()
@@ -1602,7 +1619,7 @@ export default function NeuroPulsePage() {
                               </button>
                             </TooltipTrigger>
                             <TooltipContent>
-                              <p className="max-w-xs">Total number of test sessions completed. Each session includes Simple and Dot Grid tests (Flash test is optional).</p>
+                              <p className="max-w-xs">Total number of test sessions completed. Each session includes all three tests: Simple, Dot Grid, and Flash.</p>
                             </TooltipContent>
                           </Tooltip>
                         </div>
@@ -2223,8 +2240,7 @@ export default function NeuroPulsePage() {
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-sm font-semibold">Test Session Progress</h3>
                   <span className="text-xs text-muted-foreground">
-                    {[currentSession.simple, currentSession.dotgrid].filter(Boolean).length}/2 Required
-                    {currentSession.flash && ' + Flash'}
+                    {[currentSession.simple, currentSession.dotgrid, currentSession.flash].filter(Boolean).length}/3 Required
                   </span>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
@@ -2239,13 +2255,13 @@ export default function NeuroPulsePage() {
                   <div className={`text-center p-2 rounded ${currentSession.flash ? 'bg-success/20 border border-success' : isMobile ? 'bg-secondary' : 'bg-secondary/50 opacity-60'}`}>
                     <p className="text-xs font-medium">Flash</p>
                     <p className="text-xs text-muted-foreground">
-                      {currentSession.flash ? '✓ Done' : isMobile ? 'Optional' : 'Mobile Only'}
+                      {currentSession.flash ? '✓ Done' : isMobile ? 'Required' : 'Mobile Only'}
                     </p>
                   </div>
                 </div>
-                {canSaveSession() && !currentSession.flash && (
+                {!canSaveSession() && (
                   <p className="text-xs text-muted-foreground text-center mt-2">
-                    Session can be saved (Flash test is optional)
+                    Complete all 3 tests to generate report
                   </p>
                 )}
               </div>
@@ -2261,7 +2277,7 @@ export default function NeuroPulsePage() {
                   Start New Test Session
                 </Button>
                 <p className="text-xs text-muted-foreground mt-2">
-                  Complete Simple and Dot Grid tests (Flash test is optional, mobile only)
+                  Complete all 3 tests to generate report (Flash test requires mobile device)
                 </p>
               </div>
             )}
@@ -2379,11 +2395,9 @@ export default function NeuroPulsePage() {
                   <div className="text-center py-6 bg-secondary rounded-lg">
                     <p className="text-xs text-muted-foreground mb-2">
                       {canSaveSession()
-                        ? currentSession.flash
-                          ? 'Combined NeuroScore (All Tests Complete)' 
-                          : 'Combined NeuroScore (Simple + Dot Grid)'
+                        ? 'Combined NeuroScore (All Tests Complete)' 
                         : (currentSession.simple || currentSession.dotgrid || currentSession.flash)
-                        ? `Session Progress: ${[currentSession.simple, currentSession.dotgrid].filter(Boolean).length}/2 Required`
+                        ? `Session Progress: ${[currentSession.simple, currentSession.dotgrid, currentSession.flash].filter(Boolean).length}/3 Required`
                         : 'NeuroScore'}
                     </p>
                     <p className="text-4xl sm:text-5xl font-bold text-foreground mb-2">
@@ -2398,8 +2412,7 @@ export default function NeuroPulsePage() {
                     </p>
                     {canSaveSession() && (
                       <p className="text-xs text-success mt-2 font-medium">
-                        ✓ Session Complete - {currentSession.simple && currentSession.dotgrid && currentSession.flash ? 'All tests complete' : 'Saved to History'}
-                        {!currentSession.flash && !isMobile && ' (Flash test skipped - mobile only)'}
+                        ✓ Session Complete - All tests complete. Saved to History.
                       </p>
                     )}
                   </div>
@@ -3187,7 +3200,6 @@ export default function NeuroPulsePage() {
                         className="w-full h-14 text-base bg-success hover:bg-success/90 touch-manipulation"
                       >
                         Save Session to History
-                        {!currentSession.flash && !isMobile && ' (Flash skipped)'}
                       </Button>
                     )}
                     {!sessionInProgress && (
@@ -3199,14 +3211,14 @@ export default function NeuroPulsePage() {
                         Start New Session
                       </Button>
                     )}
-                    <Button 
-                      onClick={runAgain} 
-                      variant="outline"
-                      size="lg"
+                  <Button 
+                    onClick={runAgain} 
+                    variant="outline"
+                    size="lg"
                       className="w-full h-14 text-base touch-manipulation"
-                    >
+                  >
                       {sessionInProgress ? 'Retry This Test' : 'Run Again'}
-                    </Button>
+                  </Button>
                   </div>
                 </div>
               )}
@@ -3214,28 +3226,37 @@ export default function NeuroPulsePage() {
           </Card>
         )}
 
-        {/* AI Report Card - Only show in test view */}
-        {viewMode === 'test' && (
-          <Card className="p-3 sm:p-4 space-y-3 bg-card border-medical">
-          <div className="flex items-center gap-2 mb-1">
-            <Brain className="w-4 h-4 text-primary" />
-            <h2 className="text-sm sm:text-base font-semibold text-foreground">AI Driver Report</h2>
+        {/* AI Report Card - Only show when all 3 tests are completed */}
+        {viewMode === 'test' && canSaveSession() && (
+          <div ref={reportCardRef}>
+          <Card className="p-3 sm:p-4 space-y-3 bg-card border-medical border-2 border-primary/30 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <div className="flex items-center gap-2 mb-2">
+            <Brain className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
+            <h2 className="text-base sm:text-lg font-bold text-foreground">Complete Test Report</h2>
+            <span className="ml-auto text-xs font-semibold px-2 py-1 bg-success/20 text-success rounded">
+              All Tests Complete
+            </span>
           </div>
 
-          <div className="space-y-3">
-            <p className="text-sm text-foreground leading-relaxed">
-              {aiInsights.summary}
-            </p>
+          <div className="space-y-4">
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 sm:p-4">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                Executive Summary
+              </h3>
+              <p className="text-sm sm:text-base text-foreground leading-relaxed font-medium">
+                {aiInsights.summary}
+              </p>
+            </div>
 
             {/* Observations */}
             <div className="space-y-2">
               <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                 Key Observations
               </h3>
-              <ul className="space-y-1.5">
+              <ul className="space-y-2">
                 {aiInsights.observations.map((obs, idx) => (
-                  <li key={idx} className="flex items-start gap-2 text-xs text-foreground">
-                    <span className="text-primary mt-0.5">•</span>
+                  <li key={idx} className="flex items-start gap-2 text-sm text-foreground">
+                    <span className="text-primary mt-0.5 font-bold">•</span>
                     <span className="flex-1">{obs}</span>
                   </li>
                 ))}
@@ -3243,34 +3264,50 @@ export default function NeuroPulsePage() {
             </div>
 
             {/* Suggestion */}
-            <div className="bg-accent/20 border border-accent rounded-lg p-3 space-y-1.5">
+            <div className="bg-accent/20 border-2 border-accent rounded-lg p-3 sm:p-4 space-y-2">
               <div className="flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-accent-foreground" />
-                <h3 className="text-xs font-semibold text-accent-foreground">
-                  Recommendation
+                <AlertCircle className="w-5 h-5 text-accent-foreground" />
+                <h3 className="text-sm font-bold text-accent-foreground">
+                  Safety Recommendation
                 </h3>
               </div>
-              <p className="text-xs text-accent-foreground leading-relaxed">
+              <p className="text-sm text-accent-foreground leading-relaxed font-medium">
                 {aiInsights.suggestion}
               </p>
             </div>
 
+            {/* Combined Score Display */}
+            <div className="bg-secondary/50 rounded-lg p-3 sm:p-4 text-center border border-border">
+              <p className="text-xs text-muted-foreground mb-1">Final Combined NeuroScore</p>
+              <p className="text-3xl sm:text-4xl font-bold text-foreground mb-1">
+                {calculateCombinedNeuroScore()}
+              </p>
+              <p className={`text-sm font-semibold ${
+                calculateCombinedNeuroScore() >= 75 ? 'text-success' :
+                calculateCombinedNeuroScore() >= 50 ? 'text-primary' : 
+                'text-destructive'
+              }`}>
+                {getAlertLevel(calculateCombinedNeuroScore())}
+              </p>
+            </div>
+
             {/* Disclaimer */}
-            <div className="pt-3 border-t border-border">
+            <div className="pt-2 border-t border-border">
               <p className="text-xs text-muted-foreground italic text-center">
                 This is a safety screening tool, not a medical diagnosis.
               </p>
             </div>
           </div>
         </Card>
+        </div>
         )}
 
         {viewMode === 'test' && (
-          <Card className="p-3 bg-secondary/50 border-border">
-            <p className="text-xs text-muted-foreground text-center leading-relaxed">
-              Quick cognitive assessment using reaction time, facial micro-movement analysis, and visual tracking performance
-            </p>
-          </Card>
+        <Card className="p-3 bg-secondary/50 border-border">
+          <p className="text-xs text-muted-foreground text-center leading-relaxed">
+            Quick cognitive assessment using reaction time, facial micro-movement analysis, and visual tracking performance
+          </p>
+        </Card>
         )}
           </>
         )}

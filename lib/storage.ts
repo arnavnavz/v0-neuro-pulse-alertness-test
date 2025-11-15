@@ -34,7 +34,7 @@ export interface StoredTestResult {
         interpretation: string
       }
     }
-    flash?: {
+    flash: {
       reactionTimeMs: number
       blinkLatencyMs: number
       blinkCount: number
@@ -59,11 +59,11 @@ const STORAGE_KEY = 'neuropulse_test_history'
 const MAX_HISTORY_ITEMS = 100 // Keep last 100 tests
 
 export const storage = {
-  // Save a complete test session (Simple and Dot Grid required, Flash optional)
+  // Save a complete test session (all 3 tests required)
   saveTestSession: (results: {
     simple: any
     dotgrid: any
-    flash?: any
+    flash: any
   }, combinedScore: number): void => {
     try {
       const history = storage.getTestHistory()
@@ -73,7 +73,7 @@ export const storage = {
         results: {
           simple: results.simple,
           dotgrid: results.dotgrid,
-          ...(results.flash && { flash: results.flash })
+          flash: results.flash
         },
         combinedScore
       }
