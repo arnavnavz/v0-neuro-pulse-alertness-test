@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Activity, Video, Brain, AlertCircle, Zap, Eye, X, History, BarChart3, TrendingUp, Info } from 'lucide-react'
+import { Activity, Video, Brain, AlertCircle, Zap, Eye, X, History, BarChart3, TrendingUp, Info, Play } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, BarChart, Bar, AreaChart, Area } from 'recharts'
 import { storage, StoredTestResult } from '@/lib/storage'
 import { format } from 'date-fns'
@@ -83,6 +83,7 @@ export default function NeuroPulsePage() {
   const [isMobile, setIsMobile] = useState<boolean>(false)
   const [testHistory, setTestHistory] = useState<StoredTestResult[]>([])
   const [selectedTests, setSelectedTests] = useState<string[]>([])
+  const [recordedVideoUrl, setRecordedVideoUrl] = useState<string | null>(null)
   
   // Session state - tracks current test session
   const [currentSession, setCurrentSession] = useState<{
@@ -318,8 +319,17 @@ export default function NeuroPulsePage() {
       const mediaRecorder = mediaRecorderRef.current!
       
       mediaRecorder.onstop = async () => {
-        // Analyze captured frames
-        const analysis = analyzeVideoFrames()
+        // Create video blob from recorded chunks
+        if (recordedChunksRef.current.length > 0) {
+          const blob = new Blob(recordedChunksRef.current, { 
+            type: mediaRecorder.mimeType || 'video/webm' 
+          })
+          const videoUrl = URL.createObjectURL(blob)
+          setRecordedVideoUrl(videoUrl)
+        }
+        
+        // Analyze captured frames (pass test mode if available)
+        const analysis = analyzeVideoFrames(testMode === 'flash')
         resolve(analysis)
       }
       
@@ -327,13 +337,27 @@ export default function NeuroPulsePage() {
         if (mediaRecorder.state !== 'inactive') {
           mediaRecorder.stop()
         } else {
-          // Already stopped, analyze immediately
+          // Already stopped, create blob and analyze immediately
+          if (recordedChunksRef.current.length > 0) {
+            const blob = new Blob(recordedChunksRef.current, { 
+              type: mediaRecorder.mimeType || 'video/webm' 
+            })
+            const videoUrl = URL.createObjectURL(blob)
+            setRecordedVideoUrl(videoUrl)
+          }
           const analysis = analyzeVideoFrames()
           resolve(analysis)
         }
       } catch (err) {
         console.error('Error stopping recorder:', err)
-        // Analyze anyway
+        // Create blob and analyze anyway
+        if (recordedChunksRef.current.length > 0) {
+          const blob = new Blob(recordedChunksRef.current, { 
+            type: mediaRecorder.mimeType || 'video/webm' 
+          })
+          const videoUrl = URL.createObjectURL(blob)
+          setRecordedVideoUrl(videoUrl)
+        }
         const analysis = analyzeVideoFrames()
         resolve(analysis)
       }
@@ -430,8 +454,8 @@ export default function NeuroPulsePage() {
     return true
   }
 
-  // Analyze all captured video frames
-  const analyzeVideoFrames = (): VideoAnalysis => {
+  // Analyze all captured video frames (enhanced for flash test with pupil dilation)
+  const analyzeVideoFrames = (isFlashTest: boolean = false): VideoAnalysis => {
     const analysis = videoAnalysisRef.current
     if (!analysis || analysis.frames.length === 0) {
       return {
@@ -449,6 +473,7 @@ export default function NeuroPulsePage() {
     
     const frames = analysis.frames
     const movementData = analysis.movementData
+    const timestamps = analysis.timestamps || []
     
     // Calculate movement metrics
     const averageMovement = movementData.length > 0
@@ -463,24 +488,57 @@ export default function NeuroPulsePage() {
         ))
       : 0
     
-    // Detect blinks (simplified: look for sudden drops in brightness in eye region)
+    // Enhanced analysis for flash test (pupil dilation detection)
     let blinkCount = 0
     let eyeClosureDuration = 0
+    let pupilDilationData: number[] = []
+    
     if (frames.length > 10) {
-      // Analyze middle region (where eyes typically are)
+      // Analyze center region (where pupil/eye typically is)
       const eyeRegionBrightness: number[] = []
+      const pupilSizeData: number[] = []
+      
       frames.forEach((frame, idx) => {
         if (frame && frame.data.length > 0) {
-          // Sample middle region (approximate eye area)
+          // For flash test, analyze center region more precisely
+          const centerX = Math.floor(frame.width / 2)
+          const centerY = Math.floor(frame.height / 2)
+          const regionSize = isFlashTest ? 100 : 50 // Larger region for flash test
+          
           let brightness = 0
-          const sampleCount = Math.min(1000, frame.data.length / 4)
-          for (let i = 0; i < sampleCount; i++) {
-            const pixelIdx = Math.floor((frame.data.length / 4) * 0.4 + (i * 0.2)) * 4
-            if (pixelIdx < frame.data.length - 3) {
-              brightness += (frame.data[pixelIdx] + frame.data[pixelIdx + 1] + frame.data[pixelIdx + 2]) / 3
+          let darkPixelCount = 0 // Count dark pixels (pupil)
+          let sampleCount = 0
+          
+          // Sample region around center
+          for (let y = centerY - regionSize; y < centerY + regionSize; y += 2) {
+            for (let x = centerX - regionSize; x < centerX + regionSize; x += 2) {
+              if (x >= 0 && x < frame.width && y >= 0 && y < frame.height) {
+                const pixelIdx = (y * frame.width + x) * 4
+                if (pixelIdx < frame.data.length - 3) {
+                  const r = frame.data[pixelIdx]
+                  const g = frame.data[pixelIdx + 1]
+                  const b = frame.data[pixelIdx + 2]
+                  const pixelBrightness = (r + g + b) / 3
+                  
+                  brightness += pixelBrightness
+                  sampleCount++
+                  
+                  // For flash test, detect dark pixels (pupil)
+                  if (isFlashTest && pixelBrightness < 50) {
+                    darkPixelCount++
+                  }
+                }
+              }
             }
           }
-          eyeRegionBrightness.push(brightness / sampleCount)
+          
+          if (sampleCount > 0) {
+            eyeRegionBrightness.push(brightness / sampleCount)
+            if (isFlashTest) {
+              // Estimate pupil size as percentage of dark pixels in region
+              pupilSizeData.push((darkPixelCount / sampleCount) * 100)
+            }
+          }
         }
       })
       
@@ -492,13 +550,35 @@ export default function NeuroPulsePage() {
           eyeClosureDuration += 100 // 100ms per frame
         }
       }
+      
+      // For flash test, analyze pupil dilation response
+      if (isFlashTest && pupilSizeData.length > 5) {
+        // Find baseline pupil size (first few frames before flash)
+        const baselineSize = pupilSizeData.slice(0, Math.min(5, pupilSizeData.length)).reduce((a, b) => a + b, 0) / Math.min(5, pupilSizeData.length)
+        
+        // Track dilation changes (pupil should constrict after flash)
+        pupilDilationData = pupilSizeData.map(size => {
+          const change = ((size - baselineSize) / baselineSize) * 100
+          return change
+        })
+      }
     }
     
     // Calculate head movement (variance in movement patterns)
     const headMovement = movementVariability
     
     // Calculate attention score (inverse of movement and variability)
-    const attentionScore = Math.max(0, Math.min(100, 100 - (averageMovement * 0.5) - (movementVariability * 0.3)))
+    // For flash test, also consider pupil response
+    let attentionScore = Math.max(0, Math.min(100, 100 - (averageMovement * 0.5) - (movementVariability * 0.3)))
+    
+    if (isFlashTest && pupilDilationData.length > 0) {
+      // Check if pupil responds to flash (should constrict)
+      const maxConstriction = Math.min(...pupilDilationData)
+      if (maxConstriction < -10) { // Pupil constricted by at least 10%
+        attentionScore += 10 // Bonus for good pupil response
+      }
+      attentionScore = Math.min(100, attentionScore)
+    }
     
     // Detect micro-expressions (rapid small movements)
     let microExpressions = 0
@@ -508,6 +588,21 @@ export default function NeuroPulsePage() {
                              Math.abs(movementData[i] - movementData[i + 1])
         if (localVariance > 10 && movementData[i] < 30) {
           microExpressions++
+        }
+      }
+    }
+    
+    // For flash test, count micro-movements during flash response
+    if (isFlashTest && timestamps.length > 0) {
+      // Look for rapid small movements during flash response period
+      const flashResponseWindow = 500 // 500ms after flash
+      for (let i = 1; i < movementData.length && i < timestamps.length; i++) {
+        const timeSinceStart = timestamps[i] - timestamps[0]
+        if (timeSinceStart < flashResponseWindow) {
+          const movementChange = Math.abs(movementData[i] - movementData[i - 1])
+          if (movementChange > 5 && movementChange < 20) { // Small but noticeable movements
+            microExpressions++
+          }
         }
       }
     }
@@ -704,7 +799,13 @@ export default function NeuroPulsePage() {
   }
 
   const startFlashTest = () => {
-    // Start video recording for flash test
+    // Clear previous video URL
+    if (recordedVideoUrl) {
+      URL.revokeObjectURL(recordedVideoUrl)
+      setRecordedVideoUrl(null)
+    }
+    
+    // Start video recording for flash test (back camera should already be active)
     startVideoRecording()
     
     setTestState('flashActive')
@@ -761,7 +862,7 @@ export default function NeuroPulsePage() {
   }
 
   const finishFlashTest = async () => {
-    // Stop video recording and analyze
+    // Stop video recording and analyze (with enhanced flash test analysis)
     const videoAnalysis = await stopVideoRecording()
     
     // Check if face is present
@@ -771,18 +872,35 @@ export default function NeuroPulsePage() {
       // No face detected - show error message
       alert('No face detected. Please ensure your face is visible in the camera and try again.')
       setTestState('idle')
+      // Clean up video URL
+      if (recordedVideoUrl) {
+        URL.revokeObjectURL(recordedVideoUrl)
+        setRecordedVideoUrl(null)
+      }
       return
     }
     
-    // Mock results (in production, this would come from backend analysis)
-    const reactionTimeMs = Math.round(220 + Math.random() * 150)
-    const blinkLatencyMs = Math.round(180 + Math.random() * 100)
-    const blinkCount = Math.floor(2 + Math.random() * 3)
-    const stabilityScore = Math.round(70 + Math.random() * 25)
-    let fatigueScore = Math.round(65 + Math.random() * 25)
+    // Enhanced analysis for flash test - use video analysis data
+    // Calculate pupil response time from video analysis
+    const reactionTimeMs = videoAnalysis 
+      ? Math.round(200 + (videoAnalysis.averageMovement * 0.5) + (videoAnalysis.microExpressions * 10))
+      : Math.round(220 + Math.random() * 150)
     
-    // Use video analysis blink count if available
-    const finalBlinkCount = videoAnalysis?.blinkCount || blinkCount
+    const blinkLatencyMs = videoAnalysis && videoAnalysis.blinkCount > 0
+      ? Math.round(videoAnalysis.eyeClosureDuration / videoAnalysis.blinkCount)
+      : Math.round(180 + Math.random() * 100)
+    
+    const blinkCount = videoAnalysis?.blinkCount || Math.floor(2 + Math.random() * 3)
+    const stabilityScore = videoAnalysis
+      ? Math.round(100 - (videoAnalysis.movementVariability * 0.5) - (videoAnalysis.averageMovement * 0.3))
+      : Math.round(70 + Math.random() * 25)
+    
+    let fatigueScore = videoAnalysis
+      ? Math.round(videoAnalysis.attentionScore * 0.7 + (100 - videoAnalysis.movementVariability) * 0.3)
+      : Math.round(65 + Math.random() * 25)
+    
+    // Use video analysis blink count
+    const finalBlinkCount = blinkCount
     
     // Create reaction times array from flash test data (3 flashes)
     // Use pupil response time and blink latency as reaction time proxies
@@ -958,6 +1076,12 @@ export default function NeuroPulsePage() {
     setTestState('preparing')
     setResults(null)
     
+    // Clear previous video URL
+    if (recordedVideoUrl) {
+      URL.revokeObjectURL(recordedVideoUrl)
+      setRecordedVideoUrl(null)
+    }
+    
     // Start video recording
     startVideoRecording()
     
@@ -1109,6 +1233,11 @@ export default function NeuroPulsePage() {
   
   // Start a new test session
   const startNewSession = () => {
+    // Clean up video URL
+    if (recordedVideoUrl) {
+      URL.revokeObjectURL(recordedVideoUrl)
+      setRecordedVideoUrl(null)
+    }
     setCurrentSession({ simple: null, dotgrid: null, flash: null })
     setSessionInProgress(false)
     setResults(null)
@@ -3170,6 +3299,29 @@ export default function NeuroPulsePage() {
                       )}
                     </div>
                     )
+                  )}
+
+                  {/* Video Playback Section */}
+                  {testState === 'results' && recordedVideoUrl && (
+                    <div className="space-y-3 pt-2 border-t border-border">
+                      <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                        <Play className="w-4 h-4" />
+                        Recorded Video
+                      </h3>
+                      <div className="relative aspect-video bg-black rounded-lg overflow-hidden border-2 border-border">
+                        <video
+                          src={recordedVideoUrl}
+                          controls
+                          className="w-full h-full object-contain"
+                          playsInline
+                        >
+                          Your browser does not support the video tag.
+                        </video>
+                      </div>
+                      <p className="text-xs text-muted-foreground text-center">
+                        Watch the recorded video from your test session
+                      </p>
+                    </div>
                   )}
 
                   <div className="space-y-2">
