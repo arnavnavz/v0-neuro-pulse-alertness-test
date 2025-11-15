@@ -4,32 +4,33 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: oklch(0.98 0.003 240);
-  --foreground: oklch(0.15 0.02 250);
-  --card: oklch(1 0 0);
+  /* Modern clinical tech aesthetic - Light theme */
+  --background: oklch(0.99 0.002 240); /* Very light grey/off-white */
+  --foreground: oklch(0.15 0.02 250); /* Dark text */
+  --card: oklch(1 0 0); /* Pure white cards */
   --card-foreground: oklch(0.15 0.02 250);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.15 0.02 250);
-  --primary: oklch(0.45 0.15 250);
-  --primary-foreground: oklch(0.98 0.003 240);
-  --secondary: oklch(0.95 0.005 240);
+  --primary: oklch(0.5 0.12 240); /* Calm blue - main accent */
+  --primary-foreground: oklch(0.99 0.002 240);
+  --secondary: oklch(0.97 0.003 240); /* Light grey for secondary elements */
   --secondary-foreground: oklch(0.15 0.02 250);
   --muted: oklch(0.95 0.005 240);
   --muted-foreground: oklch(0.5 0.01 250);
-  --accent: oklch(0.55 0.18 180);
-  --accent-foreground: oklch(0.98 0.003 240);
+  --accent: oklch(0.6 0.15 150); /* Soft green - secondary accent */
+  --accent-foreground: oklch(0.99 0.002 240);
   --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.98 0.003 240);
-  --success: oklch(0.55 0.15 150);
-  --border: oklch(0.88 0.005 240);
-  --input: oklch(0.88 0.005 240);
-  --ring: oklch(0.45 0.15 250);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
+  --destructive-foreground: oklch(0.99 0.002 240);
+  --success: oklch(0.6 0.15 150); /* Soft green for success states */
+  --border: oklch(0.92 0.005 240); /* Subtle borders */
+  --input: oklch(0.92 0.005 240);
+  --ring: oklch(0.5 0.12 240);
+  --chart-1: oklch(0.5 0.12 240); /* Calm blue */
+  --chart-2: oklch(0.6 0.15 150); /* Soft green */
+  --chart-3: oklch(0.55 0.18 180);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
-  --radius: 0.625rem;
+  --radius: 0.75rem; /* Slightly larger radius for modern look */
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -126,6 +127,21 @@
     @apply bg-background text-foreground;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  }
+  
+  /* Typography hierarchy */
+  h1 {
+    @apply text-3xl sm:text-4xl font-bold tracking-tight;
+  }
+  h2 {
+    @apply text-2xl sm:text-3xl font-semibold tracking-tight;
+  }
+  h3 {
+    @apply text-xl sm:text-2xl font-semibold;
+  }
+  h4 {
+    @apply text-lg sm:text-xl font-medium;
   }
   
   /* Mobile touch optimizations */
@@ -138,5 +154,14 @@
   button {
     user-select: none;
     -webkit-user-select: none;
+  }
+  
+  /* Soft shadows for cards */
+  .card-shadow {
+    box-shadow: 0 1px 3px 0 oklch(0 0 0 / 0.05), 0 1px 2px -1px oklch(0 0 0 / 0.05);
+  }
+  
+  .card-shadow-lg {
+    box-shadow: 0 4px 6px -1px oklch(0 0 0 / 0.05), 0 2px 4px -2px oklch(0 0 0 / 0.05);
   }
 }

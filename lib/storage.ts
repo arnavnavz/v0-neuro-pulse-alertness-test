@@ -51,7 +51,7 @@ export interface StoredTestResult {
         errorRate: number
         interpretation: string
       }
-    }
+    } | null
   }
   combinedScore: number
 }

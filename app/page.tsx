@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Activity, Video, Brain, AlertCircle, Zap, Eye, X, History, BarChart3, TrendingUp, Info, Play } from 'lucide-react'
+import { Activity, Video, Brain, AlertCircle, Zap, Eye, X, History, BarChart3, TrendingUp, Info, Play, Radio, CheckCircle2, Circle } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, BarChart, Bar, AreaChart, Area } from 'recharts'
 import { storage, StoredTestResult } from '@/lib/storage'
 import { format } from 'date-fns'
@@ -69,6 +69,17 @@ interface VideoAnalysis {
   headMovement: number
   attentionScore: number
   microExpressions: number
+  gptAnalysis?: {
+    blinkCount: number
+    attentionScore: number
+    analysis: string
+    fatigueIndicators?: string[]
+    pupilDilationChange?: string
+    eyeStability?: string
+    headMovement?: string
+    microExpressions?: number
+    averageMovement?: number
+  }
 }
 
 export default function NeuroPulsePage() {
@@ -82,6 +93,8 @@ export default function NeuroPulsePage() {
   const [countdown, setCountdown] = useState<string>('')
   const [flashSequenceCount, setFlashSequenceCount] = useState<number>(0)
   const [isMobile, setIsMobile] = useState<boolean>(false)
+  const [isDevMode, setIsDevMode] = useState<boolean>(false)
+  const [skipFlashTest, setSkipFlashTest] = useState<boolean>(false)
   const [testHistory, setTestHistory] = useState<StoredTestResult[]>([])
   const [selectedTests, setSelectedTests] = useState<string[]>([])
   const [recordedVideoUrl, setRecordedVideoUrl] = useState<string | null>(null)
@@ -117,6 +130,7 @@ export default function NeuroPulsePage() {
     frames: ImageData[]
     timestamps: number[]
     movementData: number[]
+    flashTimestamps?: number[]
   } | null>(null)
   const frameAnalysisIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const reportCardRef = useRef<HTMLDivElement>(null)
@@ -127,6 +141,13 @@ export default function NeuroPulsePage() {
       setIsMobile(/iPhone|iPad|iPod|Android/i.test(navigator.userAgent))
     }
     checkMobile()
+    
+    // Check if in dev mode (localhost or 127.0.0.1)
+    const checkDevMode = () => {
+      const hostname = window.location.hostname
+      setIsDevMode(hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0')
+    }
+    checkDevMode()
   }, [])
 
   // Load test history on mount
@@ -262,7 +283,8 @@ export default function NeuroPulsePage() {
       videoAnalysisRef.current = {
         frames: [],
         timestamps: [],
-        movementData: []
+        movementData: [],
+        flashTimestamps: []
       }
       
       // Try different mimeTypes for browser compatibility
@@ -300,7 +322,8 @@ export default function NeuroPulsePage() {
       videoAnalysisRef.current = {
         frames: [],
         timestamps: [],
-        movementData: []
+        movementData: [],
+        flashTimestamps: []
       }
       startFrameAnalysis()
     }
@@ -317,7 +340,7 @@ export default function NeuroPulsePage() {
     if (!mediaRecorderRef.current) {
       // If no recorder but we have analysis data, analyze it
       if (videoAnalysisRef.current && videoAnalysisRef.current.frames.length > 0) {
-        return analyzeVideoFrames()
+        return await analyzeVideoFrames()
       }
       return null
     }
@@ -336,8 +359,9 @@ export default function NeuroPulsePage() {
         }
         
         // Analyze captured frames (pass test mode if available)
-        const analysis = analyzeVideoFrames(testMode === 'flash')
-        resolve(analysis)
+        analyzeVideoFrames(testMode === 'flash').then(analysis => {
+          resolve(analysis)
+        })
       }
       
       try {
@@ -352,8 +376,9 @@ export default function NeuroPulsePage() {
             const videoUrl = URL.createObjectURL(blob)
             setRecordedVideoUrl(videoUrl)
           }
-          const analysis = analyzeVideoFrames()
-          resolve(analysis)
+          analyzeVideoFrames().then(analysis => {
+            resolve(analysis)
+          })
         }
       } catch (err) {
         console.error('Error stopping recorder:', err)
@@ -365,8 +390,9 @@ export default function NeuroPulsePage() {
           const videoUrl = URL.createObjectURL(blob)
           setRecordedVideoUrl(videoUrl)
         }
-        const analysis = analyzeVideoFrames()
-        resolve(analysis)
+        analyzeVideoFrames().then(analysis => {
+          resolve(analysis)
+        })
       }
       
       mediaRecorderRef.current = null
@@ -549,7 +575,76 @@ export default function NeuroPulsePage() {
   }
 
   // Analyze all captured video frames (enhanced for flash test with pupil dilation)
-  const analyzeVideoFrames = (isFlashTest: boolean = false): VideoAnalysis => {
+  // Call GPT API to analyze video frames
+  const analyzeVideoWithGPT = async (frames: ImageData[], testType: 'simple' | 'dotgrid' | 'flash', flashTimestamps?: number[]): Promise<any> => {
+    try {
+      if (!canvasRef.current) return null
+
+      // Convert ImageData frames to base64 images on client side
+      const base64Promises = frames.slice(0, 10).map((frame) => {
+        return new Promise<string>((resolve) => {
+          try {
+            const canvas = document.createElement('canvas')
+            canvas.width = frame.width
+            canvas.height = frame.height
+            const ctx = canvas.getContext('2d')
+            if (!ctx) {
+              resolve('')
+              return
+            }
+            
+            ctx.putImageData(frame, 0, 0)
+            canvas.toBlob((blob) => {
+              if (!blob) {
+                resolve('')
+                return
+              }
+              const reader = new FileReader()
+              reader.onloadend = () => {
+                const base64 = (reader.result as string).split(',')[1]
+                resolve(base64)
+              }
+              reader.onerror = () => resolve('')
+              reader.readAsDataURL(blob)
+            }, 'image/jpeg', 0.8)
+          } catch (err) {
+            resolve('')
+          }
+        })
+      })
+
+      const base64Images = await Promise.all(base64Promises)
+      const validImages = base64Images.filter(img => img !== '')
+
+      if (validImages.length === 0) {
+        return null
+      }
+
+      const response = await fetch('/api/analyze-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          images: validImages,
+          testType,
+          flashTimestamps: flashTimestamps || []
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to analyze video with GPT')
+      }
+
+      const data = await response.json()
+      return data.analysis || null
+    } catch (error) {
+      console.error('Error calling GPT API:', error)
+      return null
+    }
+  }
+
+  const analyzeVideoFrames = async (isFlashTest: boolean = false): Promise<VideoAnalysis> => {
     const analysis = videoAnalysisRef.current
     if (!analysis || analysis.frames.length === 0) {
       return {
@@ -857,16 +952,38 @@ export default function NeuroPulsePage() {
     // Combine micro-expressions with facial twitches and eye movements
     const totalMicroExpressions = Math.round(microExpressions + (facialTwitches * 0.5) + (eyeMovements * 0.3))
     
+    // Call GPT for video analysis
+    const testType = isFlashTest ? 'flash' : (testMode === 'simple' ? 'simple' : 'dotgrid')
+    const gptAnalysis = await analyzeVideoWithGPT(frames, testType, analysis.flashTimestamps)
+    
+    // Merge GPT analysis with pixel-based analysis
+    // Use GPT blink count if available, otherwise use pixel-based
+    const finalBlinkCount = gptAnalysis?.blinkCount !== undefined ? gptAnalysis.blinkCount : blinkCount
+    const finalAttentionScore = gptAnalysis?.attentionScore !== undefined 
+      ? Math.round((attentionScore + gptAnalysis.attentionScore) / 2) // Average of both
+      : Math.round(attentionScore)
+    
     return {
       totalFrames: frames.length,
-      averageMovement,
+      averageMovement: gptAnalysis?.averageMovement !== undefined ? gptAnalysis.averageMovement : averageMovement,
       peakMovement,
       movementVariability,
-      blinkCount,
+      blinkCount: finalBlinkCount,
       eyeClosureDuration,
-      headMovement,
-      attentionScore: Math.round(attentionScore),
-      microExpressions: totalMicroExpressions
+      headMovement: gptAnalysis?.headMovement === 'excessive' ? 100 : gptAnalysis?.headMovement === 'moderate' ? 50 : headMovement,
+      attentionScore: finalAttentionScore,
+      microExpressions: gptAnalysis?.microExpressions !== undefined ? gptAnalysis.microExpressions : totalMicroExpressions,
+      gptAnalysis: gptAnalysis ? {
+        blinkCount: gptAnalysis.blinkCount || finalBlinkCount,
+        attentionScore: gptAnalysis.attentionScore || finalAttentionScore,
+        analysis: gptAnalysis.analysis || '',
+        fatigueIndicators: gptAnalysis.fatigueIndicators || [],
+        pupilDilationChange: gptAnalysis.pupilDilationChange,
+        eyeStability: gptAnalysis.eyeStability,
+        headMovement: gptAnalysis.headMovement,
+        microExpressions: gptAnalysis.microExpressions,
+        averageMovement: gptAnalysis.averageMovement
+      } : undefined
     }
   }
 
@@ -1053,7 +1170,13 @@ export default function NeuroPulsePage() {
     if (dotGridScore !== undefined) scores.push(dotGridScore)
     if (flashScore !== undefined) scores.push(flashScore)
     
-    // Need all 3 tests for a valid combined score
+    // In dev mode with flash skipped, allow 2 tests
+    if (isDevMode && skipFlashTest) {
+      if (scores.length < 2) return 0
+      return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+    }
+    
+    // Otherwise, need all 3 tests for a valid combined score
     if (scores.length < 3) return 0
     return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
   }
@@ -1132,6 +1255,15 @@ export default function NeuroPulsePage() {
           finishFlashTest()
         }, 500)
         return
+      }
+      
+      // Record flash timestamp
+      const flashTimestamp = performance.now()
+      if (videoAnalysisRef.current) {
+        if (!videoAnalysisRef.current.flashTimestamps) {
+          videoAnalysisRef.current.flashTimestamps = []
+        }
+        videoAnalysisRef.current.flashTimestamps.push(flashTimestamp)
       }
       
       // Turn flash ON
@@ -1246,13 +1378,20 @@ export default function NeuroPulsePage() {
     setCurrentSession(updatedSession)
     setSessionInProgress(true)
     
-    // Check if session is complete and save (all 3 tests required)
-    if (updatedSession.simple && updatedSession.dotgrid && updatedSession.flash) {
+    // Check if session is complete and save
+    const hasSimple = updatedSession.simple !== null
+    const hasDotGrid = updatedSession.dotgrid !== null
+    const canSave = (isDevMode && skipFlashTest) 
+      ? (hasSimple && hasDotGrid)
+      : (hasSimple && hasDotGrid && updatedSession.flash !== null)
+    
+    if (canSave) {
       const combinedScore = calculateCombinedNeuroScore()
+      const flashResult = (isDevMode && skipFlashTest) ? null : updatedSession.flash
       storage.saveTestSession({
-        simple: updatedSession.simple,
-        dotgrid: updatedSession.dotgrid,
-        flash: updatedSession.flash
+        simple: updatedSession.simple!,
+        dotgrid: updatedSession.dotgrid!,
+        flash: flashResult
       }, combinedScore).then(async () => {
         const history = await storage.getTestHistory()
         setTestHistory(history)
@@ -1408,13 +1547,20 @@ export default function NeuroPulsePage() {
     setCurrentSession(updatedSession)
     setSessionInProgress(true)
     
-    // Check if session is complete and save (all 3 tests required)
-    if (updatedSession.simple && updatedSession.dotgrid && updatedSession.flash) {
+    // Check if session is complete and save
+    const hasSimple = updatedSession.simple !== null
+    const hasDotGrid = updatedSession.dotgrid !== null
+    const canSave = (isDevMode && skipFlashTest) 
+      ? (hasSimple && hasDotGrid)
+      : (hasSimple && hasDotGrid && updatedSession.flash !== null)
+    
+    if (canSave) {
       const combinedScore = calculateCombinedNeuroScore()
+      const flashResult = (isDevMode && skipFlashTest) ? null : updatedSession.flash
       storage.saveTestSession({
-        simple: updatedSession.simple,
-        dotgrid: updatedSession.dotgrid,
-        flash: updatedSession.flash
+        simple: updatedSession.simple!,
+        dotgrid: updatedSession.dotgrid!,
+        flash: flashResult
       }, combinedScore).then(async () => {
         const history = await storage.getTestHistory()
         setTestHistory(history)
@@ -1541,13 +1687,20 @@ export default function NeuroPulsePage() {
     setCurrentSession(updatedSession)
     setSessionInProgress(true)
     
-    // Check if session is complete and save (all 3 tests required)
-    if (updatedSession.simple && updatedSession.dotgrid && updatedSession.flash) {
+    // Check if session is complete and save
+    const hasSimple = updatedSession.simple !== null
+    const hasDotGrid = updatedSession.dotgrid !== null
+    const canSave = (isDevMode && skipFlashTest) 
+      ? (hasSimple && hasDotGrid)
+      : (hasSimple && hasDotGrid && updatedSession.flash !== null)
+    
+    if (canSave) {
       const combinedScore = calculateCombinedNeuroScore()
+      const flashResult = (isDevMode && skipFlashTest) ? null : updatedSession.flash
       storage.saveTestSession({
-        simple: updatedSession.simple,
-        dotgrid: updatedSession.dotgrid,
-        flash: updatedSession.flash
+        simple: updatedSession.simple!,
+        dotgrid: updatedSession.dotgrid!,
+        flash: flashResult
       }, combinedScore).then(async () => {
         const history = await storage.getTestHistory()
         setTestHistory(history)
@@ -1558,14 +1711,16 @@ export default function NeuroPulsePage() {
     setTestState('results')
   }
   
-  // Function to check and save session if complete (all 3 tests required)
+  // Function to check and save session if complete
   const checkAndSaveSession = () => {
-    if (currentSession.simple && currentSession.dotgrid && currentSession.flash) {
+    if (canSaveSession()) {
       const combinedScore = calculateCombinedNeuroScore()
+      // In dev mode with flash skipped, use null for flash
+      const flashResult = (isDevMode && skipFlashTest) ? null : currentSession.flash
       storage.saveTestSession({
-        simple: currentSession.simple,
-        dotgrid: currentSession.dotgrid,
-        flash: currentSession.flash
+        simple: currentSession.simple!,
+        dotgrid: currentSession.dotgrid!,
+        flash: flashResult
       }, combinedScore).then(async () => {
         const history = await storage.getTestHistory()
         setTestHistory(history)
@@ -1607,21 +1762,31 @@ export default function NeuroPulsePage() {
     setResults(null)
     setDotGridResults(null)
     setFlashTestResults(null)
+    setSkipFlashTest(false) // Reset skip flag for new session
     setTestMode('simple')
     setTestState('idle')
   }
   
-  // Get next test to complete (all 3 tests required)
+  // Get next test to complete
   const getNextTest = (): TestMode | null => {
     if (!currentSession.simple) return 'simple'
     if (!currentSession.dotgrid) return 'dotgrid'
+    // Skip flash test in dev mode if user chose to skip
+    if (isDevMode && skipFlashTest) return null
     if (!currentSession.flash) return 'flash'
     return null
   }
   
-  // Check if session can be saved (all 3 tests required)
+  // Check if session can be saved
   const canSaveSession = (): boolean => {
-    return currentSession.simple !== null && currentSession.dotgrid !== null && currentSession.flash !== null
+    const hasSimple = currentSession.simple !== null
+    const hasDotGrid = currentSession.dotgrid !== null
+    // In dev mode, allow skipping flash test
+    if (isDevMode && skipFlashTest) {
+      return hasSimple && hasDotGrid
+    }
+    // Otherwise, require all 3 tests
+    return hasSimple && hasDotGrid && currentSession.flash !== null
   }
 
   useEffect(() => {
@@ -1684,10 +1849,28 @@ export default function NeuroPulsePage() {
       }
     }
     
-    // Placeholder AI-generated insights (to be replaced with GPT call)
+    // Generate AI insights combining test scores with GPT video analysis
     let summary = ""
     let observations: string[] = []
     let suggestion = ""
+    
+    // Collect GPT video analysis insights
+    const gptInsights: string[] = []
+    if (simpleData?.videoAnalysis?.gptAnalysis?.analysis) {
+      gptInsights.push(`Video Analysis: ${simpleData.videoAnalysis.gptAnalysis.analysis}`)
+      if (simpleData.videoAnalysis.gptAnalysis.fatigueIndicators && simpleData.videoAnalysis.gptAnalysis.fatigueIndicators.length > 0) {
+        gptInsights.push(`Fatigue indicators: ${simpleData.videoAnalysis.gptAnalysis.fatigueIndicators.join(', ')}`)
+      }
+    }
+    if (dotGridData?.videoAnalysis?.gptAnalysis?.analysis) {
+      gptInsights.push(`Dot Grid Video: ${dotGridData.videoAnalysis.gptAnalysis.analysis}`)
+    }
+    if (flashData?.videoAnalysis?.gptAnalysis?.analysis) {
+      gptInsights.push(`Flash Test Video: ${flashData.videoAnalysis.gptAnalysis.analysis}`)
+      if (flashData.videoAnalysis.gptAnalysis.pupilDilationChange) {
+        gptInsights.push(`Pupil response: ${flashData.videoAnalysis.gptAnalysis.pupilDilationChange} dilation change`)
+      }
+    }
     
     if (combinedScore >= 75) {
       summary = "Your NeuroScore indicates high cognitive alertness and optimal reaction performance. You are likely well-rested and ready for demanding tasks."
@@ -1695,7 +1878,8 @@ export default function NeuroPulsePage() {
         hasSimple ? `Quick reaction time (${simpleData?.reactionTime}ms) within optimal range` : "",
         hasDotGrid ? `Strong visual tracking with ${dotGridData?.hits}/10 hits` : "",
         hasFlash ? `Sharp pupil response (${flashData?.reactionTimeMs}ms) indicates alertness` : "",
-        "Minimal movement index suggests stable focus"
+        hasFlash && flashData?.videoAnalysis?.gptAnalysis ? `GPT detected ${flashData.videoAnalysis.gptAnalysis.blinkCount} blinks with ${flashData.videoAnalysis.gptAnalysis.eyeStability || 'stable'} eye stability` : "",
+        ...gptInsights.slice(0, 2)
       ].filter(Boolean)
       suggestion = "You are clear to drive. Maintain regular breaks every 2-3 hours."
     } else if (combinedScore >= 50) {
@@ -1704,7 +1888,8 @@ export default function NeuroPulsePage() {
         hasSimple ? "Reaction time slightly slower than peak performance" : "",
         hasDotGrid ? `Moderate tracking accuracy (${dotGridData?.hits}/10 targets)` : "",
         hasFlash ? `Pupil reactivity shows ${flashData?.blinkCount} blinks detected` : "",
-        "Some indicators of mild cognitive load"
+        hasFlash && flashData?.videoAnalysis?.gptAnalysis ? `GPT analysis: ${flashData.videoAnalysis.gptAnalysis.eyeStability || 'moderate'} eye stability` : "",
+        ...gptInsights.slice(0, 2)
       ].filter(Boolean)
       suggestion = "Consider a 10-minute break and hydration before extended driving."
     } else {
@@ -1713,7 +1898,8 @@ export default function NeuroPulsePage() {
         hasSimple ? `Delayed reaction time (${simpleData?.reactionTime}ms) exceeds safe threshold` : "",
         hasDotGrid ? `Lower tracking performance with ${dotGridData?.misses} missed targets` : "",
         hasFlash ? `Slower pupil response and ${flashData?.blinkCount} blinks suggest fatigue` : "",
-        "Movement patterns suggest reduced engagement"
+        hasFlash && flashData?.videoAnalysis?.gptAnalysis?.fatigueIndicators ? `GPT detected: ${flashData.videoAnalysis.gptAnalysis.fatigueIndicators.join(', ')}` : "",
+        ...gptInsights.slice(0, 2)
       ].filter(Boolean)
       suggestion = "Take a 15-30 minute break before starting any drive. Consider rest or shift adjustment."
     }
@@ -1851,54 +2037,72 @@ export default function NeuroPulsePage() {
 
   return (
     <TooltipProvider delayDuration={200} skipDelayDuration={0}>
-    <main className="min-h-screen bg-background p-3 sm:p-4">
-      <div className="text-center space-y-2 mb-4 sm:mb-6">
-        <div className="flex items-center justify-center gap-2 sm:gap-3 mb-2">
-          <Activity className="w-6 h-6 sm:w-8 sm:h-8 text-primary" />
-          <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-balance">NeuroPulse</h1>
+    <main className="min-h-screen bg-background">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        {/* Header Section - Centered with waveform icon */}
+        <div className="text-center space-y-3 mb-8 sm:mb-10">
+          <div className="flex items-center justify-center gap-3 mb-3">
+            <div className="relative">
+              <Activity className="w-8 h-8 sm:w-10 sm:h-10 text-primary" />
+              <Radio className="w-3 h-3 sm:w-4 sm:h-4 text-primary absolute -top-1 -right-1" />
         </div>
-        <p className="text-muted-foreground text-sm sm:text-base">
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-foreground">NeuroPulse</h1>
+          </div>
+          <p className="text-muted-foreground text-sm sm:text-base font-normal">
           Fatigue Screening for Commercial Drivers
         </p>
       </div>
 
-      <div className="max-w-2xl mx-auto space-y-3 sm:space-y-4">
-        {/* Navigation Tabs */}
-        <Card className="p-1.5 sm:p-2 bg-card border-medical">
-          <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
-            <Button
-              variant={viewMode === 'test' ? 'default' : 'outline'}
+        {/* Navigation Tabs - Modern Segmented Control */}
+        <div className="mb-6 sm:mb-8">
+          <div className="inline-flex w-full p-1 bg-secondary rounded-xl border border-border card-shadow">
+            <button
               onClick={() => setViewMode('test')}
-              className="h-auto py-2.5 sm:py-2 min-h-[44px] flex flex-col items-center gap-1 touch-manipulation"
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium text-sm transition-all duration-200 touch-manipulation ${
+                viewMode === 'test'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary/80'
+              }`}
             >
-              <Activity className="w-4 h-4 sm:w-4 sm:h-4" />
-              <span className="text-xs font-medium">Test</span>
-            </Button>
-            <Button
-              variant={viewMode === 'history' ? 'default' : 'outline'}
+              <Activity className="w-4 h-4" />
+              <span>Test</span>
+            </button>
+            <button
               onClick={() => setViewMode('history')}
-              className="h-auto py-2.5 sm:py-2 min-h-[44px] flex flex-col items-center gap-1 touch-manipulation"
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium text-sm transition-all duration-200 touch-manipulation ${
+                viewMode === 'history'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary/80'
+              }`}
             >
-              <History className="w-4 h-4 sm:w-4 sm:h-4" />
-              <span className="text-xs font-medium">History</span>
-            </Button>
-            <Button
-              variant={viewMode === 'analytics' ? 'default' : 'outline'}
+              <History className="w-4 h-4" />
+              <span>History</span>
+            </button>
+            <button
               onClick={() => setViewMode('analytics')}
-              className="h-auto py-2.5 sm:py-2 min-h-[44px] flex flex-col items-center gap-1 touch-manipulation"
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium text-sm transition-all duration-200 touch-manipulation ${
+                viewMode === 'analytics'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary/80'
+              }`}
             >
-              <TrendingUp className="w-4 h-4 sm:w-4 sm:h-4" />
-              <span className="text-xs font-medium">Analytics</span>
-            </Button>
+              <TrendingUp className="w-4 h-4" />
+              <span>Analytics</span>
+            </button>
           </div>
-        </Card>
+        </div>
+
+        <div className="space-y-6 sm:space-y-8">
 
         {/* History View */}
         {viewMode === 'history' && (
-          <div className="space-y-4">
-            <Card className="p-3 sm:p-4 bg-card border-medical">
-              <div className="flex items-center justify-between mb-3 sm:mb-4">
-                <h2 className="text-base sm:text-lg font-semibold">Test History</h2>
+          <div className="space-y-6">
+            <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-xl font-semibold text-foreground mb-1">Test History</h2>
+                  <p className="text-sm text-muted-foreground">View and compare past test sessions</p>
+                </div>
                 {testHistory.length > 0 && (
                   <Button
                     variant="outline"
@@ -1914,17 +2118,22 @@ export default function NeuroPulsePage() {
                 )}
               </div>
               {testHistory.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-8">
-                  No test history yet. Complete a test to see results here.
-                </p>
+                <div className="text-center py-12">
+                  <History className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
+                  <p className="text-sm text-muted-foreground">
+                    No test history yet. Complete a test to see results here.
+                  </p>
+                </div>
               ) : (
-                <div className="space-y-3 max-h-[600px] overflow-y-auto">
+                <div className="space-y-4 max-h-[600px] overflow-y-auto">
                   {testHistory.map((test) => {
                     return (
                       <Card
                         key={test.id}
-                        className={`p-3 cursor-pointer transition-colors ${
-                          selectedTests.includes(test.id) ? 'bg-primary/10 border-primary' : ''
+                        className={`p-5 cursor-pointer transition-all duration-200 rounded-xl border-2 ${
+                          selectedTests.includes(test.id) 
+                            ? 'bg-primary/5 border-primary shadow-md' 
+                            : 'bg-card border-border hover:border-primary/50 hover:shadow-sm'
                         }`}
                         onClick={() => {
                           setSelectedTests(prev =>
@@ -1951,26 +2160,29 @@ export default function NeuroPulsePage() {
                                   <span className="font-semibold text-lg">{test.combinedScore}</span>
                                 </div>
                               </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                                <div className="bg-secondary/50 p-2 rounded">
-                                  <p className="font-medium mb-1">Simple Test</p>
-                                  <p className="text-muted-foreground">Score: <span className="font-semibold">{test.results.simple.neuroScore}</span></p>
-                                  <p className="text-muted-foreground">RT: <span className="font-semibold">{test.results.simple.fatigueMetrics.averageReactionTime}ms</span></p>
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+                                <div className="bg-secondary/30 border border-border rounded-xl p-4">
+                                  <p className="font-semibold text-sm mb-2 text-foreground">Simple Test</p>
+                                  <p className="text-xs text-muted-foreground mb-1">Score</p>
+                                  <p className="text-lg font-bold text-foreground mb-2">{test.results.simple.neuroScore}</p>
+                                  <p className="text-xs text-muted-foreground">RT: <span className="font-semibold text-foreground">{test.results.simple.fatigueMetrics.averageReactionTime}ms</span></p>
                                 </div>
-                                <div className="bg-secondary/50 p-2 rounded">
-                                  <p className="font-medium mb-1">Dot Grid</p>
-                                  <p className="text-muted-foreground">Score: <span className="font-semibold">{test.results.dotgrid.dotScore}</span></p>
-                                  <p className="text-muted-foreground">Hits: <span className="font-semibold">{test.results.dotgrid.hits}/10</span></p>
+                                <div className="bg-secondary/30 border border-border rounded-xl p-4">
+                                  <p className="font-semibold text-sm mb-2 text-foreground">Dot Grid</p>
+                                  <p className="text-xs text-muted-foreground mb-1">Score</p>
+                                  <p className="text-lg font-bold text-foreground mb-2">{test.results.dotgrid.dotScore}</p>
+                                  <p className="text-xs text-muted-foreground">Hits: <span className="font-semibold text-foreground">{test.results.dotgrid.hits}/10</span></p>
                                 </div>
-                                <div className="bg-secondary/50 p-2 rounded">
-                                  <p className="font-medium mb-1">Flash Test</p>
+                                <div className="bg-secondary/30 border border-border rounded-xl p-4">
+                                  <p className="font-semibold text-sm mb-2 text-foreground">Flash Test</p>
                                   {test.results.flash ? (
                                     <>
-                                      <p className="text-muted-foreground">Score: <span className="font-semibold">{test.results.flash.fatigueScore}</span></p>
-                                      <p className="text-muted-foreground">Level: <span className="font-semibold">{test.results.flash.fatigueLevel}</span></p>
+                                      <p className="text-xs text-muted-foreground mb-1">Score</p>
+                                      <p className="text-lg font-bold text-foreground mb-2">{test.results.flash.fatigueScore}</p>
+                                      <p className="text-xs text-muted-foreground">Level: <span className="font-semibold text-foreground">{test.results.flash.fatigueLevel}</span></p>
                                     </>
                                   ) : (
-                                    <p className="text-muted-foreground text-xs italic">Not completed</p>
+                                    <p className="text-xs text-muted-foreground italic">Not completed</p>
                                   )}
                                 </div>
                               </div>
@@ -2000,16 +2212,19 @@ export default function NeuroPulsePage() {
 
             {/* Comparison View */}
             {selectedTests.length > 0 && (
-              <Card className="p-3 sm:p-4 bg-card border-medical">
-                <h2 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4">
-                  Comparison ({selectedTests.length} selected)
-                </h2>
+              <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+                <div className="mb-6">
+                  <h2 className="text-xl font-semibold text-foreground mb-1">
+                    Comparison ({selectedTests.length} selected)
+                  </h2>
+                  <p className="text-sm text-muted-foreground">Compare metrics across selected sessions</p>
+                </div>
                 <div className="space-y-4">
                   {selectedTests.map((testId) => {
                     const test = testHistory.find(t => t.id === testId)
                     if (!test) return null
                     return (
-                      <div key={testId} className="border rounded-lg p-3 sm:p-4 space-y-3">
+                      <div key={testId} className="border-2 border-border rounded-xl p-5 bg-card space-y-4 card-shadow">
                         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                           <span className="text-xs sm:text-sm font-semibold">
                             Session - {format(new Date(test.timestamp), 'MMM d, h:mm a')}
@@ -2100,10 +2315,13 @@ export default function NeuroPulsePage() {
               <>
                 {/* Summary Statistics */}
                 {summaryStats && (
-                  <Card className="p-3 sm:p-4 bg-card border-medical">
-                    <h2 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4">Performance Summary</h2>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
-                      <div className="bg-secondary/50 p-3 rounded-lg text-center">
+                  <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+                    <div className="mb-6">
+                      <h2 className="text-xl font-semibold text-foreground mb-1">Performance Summary</h2>
+                      <p className="text-sm text-muted-foreground">Key metrics across all test sessions</p>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="bg-card border border-border rounded-xl p-4 card-shadow text-center">
                         <div className="flex items-center justify-center gap-1 mb-1">
                           <p className="text-xs text-muted-foreground">Total Sessions</p>
                           <Tooltip>
@@ -2117,9 +2335,9 @@ export default function NeuroPulsePage() {
                             </TooltipContent>
                           </Tooltip>
                         </div>
-                        <p className="text-2xl font-bold text-foreground">{summaryStats.totalSessions}</p>
+                        <p className="text-2xl sm:text-3xl font-bold text-foreground">{summaryStats.totalSessions}</p>
                       </div>
-                      <div className="bg-secondary/50 p-3 rounded-lg text-center">
+                      <div className="bg-card border border-border rounded-xl p-4 card-shadow text-center">
                         <div className="flex items-center justify-center gap-1 mb-1">
                           <p className="text-xs text-muted-foreground">Avg Score</p>
                           <Tooltip>
@@ -2133,9 +2351,9 @@ export default function NeuroPulsePage() {
                             </TooltipContent>
                           </Tooltip>
                         </div>
-                        <p className="text-2xl font-bold text-foreground">{summaryStats.avgScore}</p>
+                        <p className="text-2xl sm:text-3xl font-bold text-foreground">{summaryStats.avgScore}</p>
                       </div>
-                      <div className="bg-secondary/50 p-3 rounded-lg text-center">
+                      <div className="bg-card border border-border rounded-xl p-4 card-shadow text-center">
                         <div className="flex items-center justify-center gap-1 mb-1">
                           <p className="text-xs text-muted-foreground">Best Score</p>
                           <Tooltip>
@@ -2149,9 +2367,9 @@ export default function NeuroPulsePage() {
                             </TooltipContent>
                           </Tooltip>
                         </div>
-                        <p className="text-2xl font-bold text-success">{summaryStats.bestScore}</p>
+                        <p className="text-2xl sm:text-3xl font-bold text-success">{summaryStats.bestScore}</p>
                       </div>
-                      <div className="bg-secondary/50 p-3 rounded-lg text-center">
+                      <div className="bg-card border border-border rounded-xl p-4 card-shadow text-center">
                         <div className="flex items-center justify-center gap-1 mb-1">
                           <p className="text-xs text-muted-foreground">Worst Score</p>
                           <Tooltip>
@@ -2165,11 +2383,11 @@ export default function NeuroPulsePage() {
                             </TooltipContent>
                           </Tooltip>
                         </div>
-                        <p className="text-2xl font-bold text-destructive">{summaryStats.worstScore}</p>
+                        <p className="text-2xl sm:text-3xl font-bold text-destructive">{summaryStats.worstScore}</p>
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3 mt-3">
-                      <div className="bg-secondary/50 p-3 rounded-lg text-center">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+                      <div className="bg-card border border-border rounded-xl p-4 card-shadow text-center">
                         <div className="flex items-center justify-center gap-1 mb-1">
                           <p className="text-xs text-muted-foreground">Avg Simple RT</p>
                           <Tooltip>
@@ -2183,9 +2401,9 @@ export default function NeuroPulsePage() {
                             </TooltipContent>
                           </Tooltip>
                         </div>
-                        <p className="text-lg font-bold text-foreground">{summaryStats.avgSimpleRT}<span className="text-xs">ms</span></p>
+                        <p className="text-xl sm:text-2xl font-bold text-foreground">{summaryStats.avgSimpleRT}<span className="text-xs ml-1">ms</span></p>
                       </div>
-                      <div className="bg-secondary/50 p-3 rounded-lg text-center">
+                      <div className="bg-card border border-border rounded-xl p-4 card-shadow text-center">
                         <div className="flex items-center justify-center gap-1 mb-1">
                           <p className="text-xs text-muted-foreground">Avg Dot Grid RT</p>
                           <Tooltip>
@@ -2199,9 +2417,9 @@ export default function NeuroPulsePage() {
                             </TooltipContent>
                           </Tooltip>
                         </div>
-                        <p className="text-lg font-bold text-foreground">{summaryStats.avgDotGridRT}<span className="text-xs">ms</span></p>
+                        <p className="text-xl sm:text-2xl font-bold text-foreground">{summaryStats.avgDotGridRT}<span className="text-xs ml-1">ms</span></p>
                       </div>
-                      <div className="bg-secondary/50 p-3 rounded-lg text-center">
+                      <div className="bg-card border border-border rounded-xl p-4 card-shadow text-center">
                         <div className="flex items-center justify-center gap-1 mb-1">
                           <p className="text-xs text-muted-foreground">Avg Variability</p>
                           <Tooltip>
@@ -2215,9 +2433,9 @@ export default function NeuroPulsePage() {
                             </TooltipContent>
                           </Tooltip>
                         </div>
-                        <p className="text-lg font-bold text-foreground">{summaryStats.avgVariability}<span className="text-xs">ms</span></p>
+                        <p className="text-xl sm:text-2xl font-bold text-foreground">{summaryStats.avgVariability}<span className="text-xs ml-1">ms</span></p>
                       </div>
-                      <div className="bg-secondary/50 p-3 rounded-lg text-center">
+                      <div className="bg-card border border-border rounded-xl p-4 card-shadow text-center">
                         <div className="flex items-center justify-center gap-1 mb-1">
                           <p className="text-xs text-muted-foreground">Total Lapses</p>
                           <Tooltip>
@@ -2231,32 +2449,37 @@ export default function NeuroPulsePage() {
                             </TooltipContent>
                           </Tooltip>
                         </div>
-                        <p className="text-lg font-bold text-foreground">{summaryStats.totalLapses}</p>
-                        <p className="text-xs text-muted-foreground">({summaryStats.avgLapsesPerSession}/session)</p>
+                        <p className="text-xl sm:text-2xl font-bold text-foreground">{summaryStats.totalLapses}</p>
+                        <p className="text-xs text-muted-foreground mt-1">({summaryStats.avgLapsesPerSession}/session)</p>
                       </div>
                     </div>
                   </Card>
                 )}
 
                 {/* GPT-Powered Analytics Insights */}
-                <Card className="p-3 sm:p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
-                    <Brain className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
-                    <h2 className="text-base sm:text-lg font-semibold">AI-Powered Trend Analysis</h2>
+                <Card className="p-6 sm:p-8 bg-gradient-to-br from-primary/5 to-accent/5 border border-primary/20 rounded-xl card-shadow">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="p-2 bg-primary/10 rounded-lg">
+                      <Brain className="w-5 h-5 text-primary" />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-semibold text-foreground">AI-Powered Trend Analysis</h2>
+                      <p className="text-xs text-muted-foreground">Intelligent insights from your test data</p>
+                    </div>
                   </div>
-                  <div className="space-y-4">
-                    <p className="text-sm text-foreground leading-relaxed">
+                  <div className="space-y-6">
+                    <p className="text-base text-foreground leading-relaxed font-medium">
                       {analyticsInsights.summary}
                     </p>
                     
                     {analyticsInsights.trends.length > 0 && (
-                      <div className="space-y-2">
-                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Key Metrics</h3>
-                        <ul className="space-y-1.5">
+                      <div className="space-y-3">
+                        <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">Key Metrics</h3>
+                        <ul className="space-y-2.5">
                           {analyticsInsights.trends.map((trend, idx) => (
-                            <li key={idx} className="flex items-start gap-2 text-xs text-foreground">
-                              <span className="text-primary mt-0.5">•</span>
-                              <span className="flex-1">{trend}</span>
+                            <li key={idx} className="flex items-start gap-3 text-sm text-foreground">
+                              <div className="w-1.5 h-1.5 rounded-full bg-primary mt-2 flex-shrink-0" />
+                              <span className="flex-1 leading-relaxed">{trend}</span>
                             </li>
                           ))}
                         </ul>
@@ -2264,16 +2487,16 @@ export default function NeuroPulsePage() {
                     )}
 
                     {analyticsInsights.patterns.length > 0 && (
-                      <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 space-y-2">
-                        <h3 className="text-xs font-semibold text-amber-600 uppercase tracking-wide flex items-center gap-2">
-                          <AlertCircle className="w-4 h-4" />
+                      <div className="bg-amber-50 border-l-4 border-amber-500 rounded-lg p-4 space-y-3">
+                        <h3 className="text-sm font-semibold text-amber-700 uppercase tracking-wide flex items-center gap-2">
+                          <AlertCircle className="w-5 h-5" />
                           Detected Patterns
                         </h3>
-                        <ul className="space-y-1.5">
+                        <ul className="space-y-2.5">
                           {analyticsInsights.patterns.map((pattern, idx) => (
-                            <li key={idx} className="flex items-start gap-2 text-xs text-foreground">
-                              <span className="text-amber-600 mt-0.5">⚠</span>
-                              <span className="flex-1">{pattern}</span>
+                            <li key={idx} className="flex items-start gap-3 text-sm text-amber-900">
+                              <span className="text-amber-600 mt-0.5 font-bold">⚠</span>
+                              <span className="flex-1 leading-relaxed">{pattern}</span>
                             </li>
                           ))}
                         </ul>
@@ -2281,16 +2504,16 @@ export default function NeuroPulsePage() {
                     )}
 
                     {analyticsInsights.recommendations.length > 0 && (
-                      <div className="bg-accent/20 border border-accent rounded-lg p-3 space-y-2">
-                        <h3 className="text-xs font-semibold text-accent-foreground uppercase tracking-wide flex items-center gap-2">
-                          <TrendingUp className="w-4 h-4" />
+                      <div className="bg-success/10 border-l-4 border-success rounded-lg p-4 space-y-3">
+                        <h3 className="text-sm font-semibold text-success uppercase tracking-wide flex items-center gap-2">
+                          <TrendingUp className="w-5 h-5" />
                           Recommendations
                         </h3>
-                        <ul className="space-y-1.5">
+                        <ul className="space-y-2.5">
                           {analyticsInsights.recommendations.map((rec, idx) => (
-                            <li key={idx} className="flex items-start gap-2 text-xs text-accent-foreground">
-                              <span className="text-accent-foreground mt-0.5">→</span>
-                              <span className="flex-1">{rec}</span>
+                            <li key={idx} className="flex items-start gap-3 text-sm text-foreground">
+                              <span className="text-success mt-0.5 font-bold">→</span>
+                              <span className="flex-1 leading-relaxed">{rec}</span>
                             </li>
                           ))}
                         </ul>
@@ -2300,21 +2523,24 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Score Trend */}
-                <Card className="p-3 sm:p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
-                    <h2 className="text-base sm:text-lg font-semibold">Score Trend Over Time</h2>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button type="button" className="inline-flex items-center">
-                          <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs">Shows how your combined NeuroScore changes across test sessions. Track improvements or declines in cognitive performance over time. <strong>Ideal: 75-100</strong> consistently.</p>
-                      </TooltipContent>
-                    </Tooltip>
+                <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+                  <div className="mb-6">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h2 className="text-xl font-semibold text-foreground">Score Trend Over Time</h2>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" className="inline-flex items-center">
+                            <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">Shows how your combined NeuroScore changes across test sessions. Track improvements or declines in cognitive performance over time. <strong>Ideal: 75-100</strong> consistently.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <p className="text-sm text-muted-foreground mb-4">NeuroScore per session</p>
                   </div>
-                  <ResponsiveContainer width="100%" height={200}>
+                  <ResponsiveContainer width="100%" height={250}>
                     <AreaChart data={testHistory.slice().reverse().map(test => ({
                       date: format(new Date(test.timestamp), 'MMM d'),
                       time: format(new Date(test.timestamp), 'h:mm a'),
@@ -2331,21 +2557,24 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Individual Test Scores Comparison */}
-                <Card className="p-3 sm:p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
-                    <h2 className="text-base sm:text-lg font-semibold">Individual Test Scores Over Time</h2>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button type="button" className="inline-flex items-center">
-                          <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs">Compares scores from Simple Test, Dot Grid, and Flash Test separately. Helps identify which test type shows the most variation. <strong>Ideal: 75-100</strong> for all test types.</p>
-                      </TooltipContent>
-                    </Tooltip>
+                <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+                  <div className="mb-6">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h2 className="text-xl font-semibold text-foreground">Individual Test Scores Over Time</h2>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" className="inline-flex items-center">
+                            <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">Compares scores from Simple Test, Dot Grid, and Flash Test separately. Helps identify which test type shows the most variation. <strong>Ideal: 75-100</strong> for all test types.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <p className="text-sm text-muted-foreground mb-4">Individual test performance trends</p>
                   </div>
-                  <ResponsiveContainer width="100%" height={200}>
+                  <ResponsiveContainer width="100%" height={250}>
                     <LineChart data={testHistory.slice().reverse().map(test => ({
                       date: format(new Date(test.timestamp), 'MMM d'),
                       time: format(new Date(test.timestamp), 'h:mm a'),
@@ -2366,19 +2595,21 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Reaction Time Trend */}
-                <Card className="p-3 sm:p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
-                    <h2 className="text-base sm:text-lg font-semibold">Average Reaction Time Trend</h2>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button type="button" className="inline-flex items-center">
-                          <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs">Tracks average reaction times across different test types. Increasing reaction times may indicate accumulating fatigue. <strong>Ideal: 200-300ms</strong> (Simple), <strong>200-400ms</strong> (Dot Grid).</p>
-                      </TooltipContent>
-                    </Tooltip>
+                <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+                  <div className="mb-6">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h2 className="text-xl font-semibold text-foreground">Average Reaction Time Trend</h2>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" className="inline-flex items-center">
+                            <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">Tracks average reaction times across different test types. Increasing reaction times may indicate accumulating fatigue. <strong>Ideal: 200-300ms</strong> (Simple), <strong>200-400ms</strong> (Dot Grid).</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
                   </div>
                   <ResponsiveContainer width="100%" height={200}>
                     <LineChart data={testHistory.slice().reverse().map(test => ({
@@ -2401,19 +2632,21 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Variability Trend */}
-                <Card className="p-3 sm:p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
-                    <h2 className="text-base sm:text-lg font-semibold">Reaction Time Variability Trend</h2>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button type="button" className="inline-flex items-center">
-                          <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs">Shows consistency of reaction times. Higher variability (standard deviation) indicates less consistent performance, often associated with fatigue. <strong>Ideal: &lt;50ms</strong> (lower is better).</p>
-                      </TooltipContent>
-                    </Tooltip>
+                <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+                  <div className="mb-6">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h2 className="text-xl font-semibold text-foreground">Reaction Time Variability Trend</h2>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" className="inline-flex items-center">
+                            <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">Shows consistency of reaction times. Higher variability (standard deviation) indicates less consistent performance, often associated with fatigue. <strong>Ideal: &lt;50ms</strong> (lower is better).</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
                   </div>
                   <ResponsiveContainer width="100%" height={200}>
                     <LineChart data={testHistory.slice().reverse().map(test => ({
@@ -2436,19 +2669,21 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Lapses Trend */}
-                <Card className="p-3 sm:p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
-                    <h2 className="text-base sm:text-lg font-semibold">Lapses Over Time</h2>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button type="button" className="inline-flex items-center">
-                          <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs">Counts lapses (reaction times &gt;500ms or timeouts) per session. Lapses are the #1 proven indicator of cognitive fatigue in PVT research. <strong>Ideal: 0</strong> per session.</p>
-                      </TooltipContent>
-                    </Tooltip>
+                <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+                  <div className="mb-6">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h2 className="text-xl font-semibold text-foreground">Lapses Over Time</h2>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" className="inline-flex items-center">
+                            <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">Counts lapses (reaction times &gt;500ms or timeouts) per session. Lapses are the #1 proven indicator of cognitive fatigue in PVT research. <strong>Ideal: 0</strong> per session.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
                   </div>
                   <ResponsiveContainer width="100%" height={200}>
                     <BarChart data={testHistory.slice().reverse().map(test => ({
@@ -2472,19 +2707,21 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Error Rate Trend */}
-                <Card className="p-3 sm:p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
-                    <h2 className="text-base sm:text-lg font-semibold">Error Rate Over Time</h2>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button type="button" className="inline-flex items-center">
-                          <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs">Percentage of errors (misses, false starts, or delayed responses) per test. Higher error rates indicate attentional drift and potential fatigue. <strong>Ideal: &lt;5%</strong> (lower is better).</p>
-                      </TooltipContent>
-                    </Tooltip>
+                <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+                  <div className="mb-6">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h2 className="text-xl font-semibold text-foreground">Error Rate Over Time</h2>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" className="inline-flex items-center">
+                            <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">Percentage of errors (misses, false starts, or delayed responses) per test. Higher error rates indicate attentional drift and potential fatigue. <strong>Ideal: &lt;5%</strong> (lower is better).</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
                   </div>
                   <ResponsiveContainer width="100%" height={200}>
                     <LineChart data={testHistory.slice().reverse().map(test => ({
@@ -2507,19 +2744,21 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* False Starts Trend */}
-                <Card className="p-3 sm:p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
-                    <h2 className="text-base sm:text-lg font-semibold">False Starts Over Time</h2>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button type="button" className="inline-flex items-center">
-                          <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs">Counts anticipatory responses (reaction times &lt;200ms). False starts indicate impulsive tapping, often due to fatigue or jitter. <strong>Ideal: 0</strong> (any false starts indicate attention issues).</p>
-                      </TooltipContent>
-                    </Tooltip>
+                <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+                  <div className="mb-6">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h2 className="text-xl font-semibold text-foreground">False Starts Over Time</h2>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" className="inline-flex items-center">
+                            <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">Counts anticipatory responses (reaction times &lt;200ms). False starts indicate impulsive tapping, often due to fatigue or jitter. <strong>Ideal: 0</strong> (any false starts indicate attention issues).</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
                   </div>
                   <ResponsiveContainer width="100%" height={200}>
                     <BarChart data={testHistory.slice().reverse().map(test => ({
@@ -2542,19 +2781,21 @@ export default function NeuroPulsePage() {
                 </Card>
 
                 {/* Performance Distribution */}
-                <Card className="p-3 sm:p-4 bg-card border-medical">
-                  <div className="flex items-center gap-2 mb-3 sm:mb-4">
-                    <h2 className="text-base sm:text-lg font-semibold">Score Distribution</h2>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button type="button" className="inline-flex items-center">
-                          <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs">Shows how your test sessions are distributed across performance levels: Fatigue (0-49), Normal (50-74), and High Alertness (75-100). <strong>Ideal: Most sessions in 75-100 range</strong>.</p>
-                      </TooltipContent>
-                    </Tooltip>
+                <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+                  <div className="mb-6">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h2 className="text-xl font-semibold text-foreground">Score Distribution</h2>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" className="inline-flex items-center">
+                            <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">Shows how your test sessions are distributed across performance levels: Fatigue (0-49), Normal (50-74), and High Alertness (75-100). <strong>Ideal: Most sessions in 75-100 range</strong>.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
                   </div>
                   <ResponsiveContainer width="100%" height={200}>
                     <BarChart data={(() => {
@@ -2704,14 +2945,32 @@ export default function NeuroPulsePage() {
 
         {/* Camera Feed & Test Controls */}
         {testState !== 'flashInstruction' && testState !== 'flashActive' && (
-          <Card className="p-3 sm:p-4 space-y-3 sm:space-y-4 bg-card border-medical">
-            {/* Webcam Preview */}
-            <div className="relative">
-              <div className="flex items-center gap-2 mb-2">
-                <Video className="w-4 h-4 text-primary" />
-                <h2 className="text-sm font-semibold text-foreground">Camera Feed</h2>
+          <div className="space-y-6 sm:space-y-8">
+            {/* Camera Feed Card - Prominent with status */}
+            <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow-lg">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <Video className="w-5 h-5 text-primary" />
+                  <h2 className="text-lg font-semibold text-foreground">Camera Feed</h2>
               </div>
-              <div className="relative aspect-[4/3] bg-secondary rounded-lg overflow-hidden border-2 border-border">
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${stream ? 'bg-success animate-pulse' : 'bg-muted-foreground'}`} />
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {stream ? 'Connected' : 'Waiting'}
+                  </span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button className="text-muted-foreground hover:text-foreground">
+                        <Info className="w-4 h-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="text-xs">Camera is used to analyze facial movements and reactions during tests</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              </div>
+              <div className="relative aspect-[4/3] bg-secondary rounded-xl overflow-hidden border border-border">
                 <video 
                   ref={videoRef} 
                   autoPlay 
@@ -2720,102 +2979,253 @@ export default function NeuroPulsePage() {
                   className="w-full h-full object-cover"
                 />
                 {!stream && (
-                  <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
-                    <p className="text-sm">Initializing camera...</p>
+                  <div className="absolute inset-0 flex items-center justify-center bg-secondary/50">
+                    <div className="text-center space-y-2">
+                      <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin mx-auto" />
+                      <p className="text-sm text-muted-foreground font-medium">Initializing camera...</p>
+                    </div>
                   </div>
                 )}
               </div>
               <canvas ref={canvasRef} className="hidden" />
-            </div>
+            </Card>
 
             {/* Session Progress */}
             {sessionInProgress && (
-              <div className="bg-secondary/50 rounded-lg p-3 space-y-2">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-semibold">Test Session Progress</h3>
-                  <span className="text-xs text-muted-foreground">
-                    {[currentSession.simple, currentSession.dotgrid, currentSession.flash].filter(Boolean).length}/3 Required
+              <Card className="p-6 bg-card border border-border rounded-xl card-shadow">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-lg font-semibold text-foreground">Test Session Progress</h3>
+                  <span className="text-sm font-medium text-muted-foreground">
+                    {[currentSession.simple, currentSession.dotgrid, currentSession.flash].filter(Boolean).length}/{isDevMode && skipFlashTest ? '2' : '3'} Complete
                   </span>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <div className={`text-center p-2 rounded ${currentSession.simple ? 'bg-success/20 border border-success' : 'bg-secondary'}`}>
-                    <p className="text-xs font-medium">Simple</p>
-                    <p className="text-xs text-muted-foreground">{currentSession.simple ? '✓ Done' : 'Required'}</p>
+            </div>
+                <div className="grid grid-cols-3 gap-4 mb-4">
+                  <div className={`text-center p-4 rounded-xl border-2 transition-all ${
+                    currentSession.simple 
+                      ? 'bg-success/10 border-success shadow-sm' 
+                      : 'bg-secondary/50 border-border'
+                  }`}>
+                    <div className="mb-2">
+                      {currentSession.simple ? (
+                        <CheckCircle2 className="w-6 h-6 text-success mx-auto" />
+                      ) : (
+                        <Circle className="w-6 h-6 text-muted-foreground mx-auto" />
+                      )}
+                    </div>
+                    <p className="text-sm font-semibold text-foreground mb-1">Simple</p>
+                    <p className="text-xs text-muted-foreground">{currentSession.simple ? 'Complete' : 'Required'}</p>
                   </div>
-                  <div className={`text-center p-2 rounded ${currentSession.dotgrid ? 'bg-success/20 border border-success' : 'bg-secondary'}`}>
-                    <p className="text-xs font-medium">Dot Grid</p>
-                    <p className="text-xs text-muted-foreground">{currentSession.dotgrid ? '✓ Done' : 'Required'}</p>
+                  <div className={`text-center p-4 rounded-xl border-2 transition-all ${
+                    currentSession.dotgrid 
+                      ? 'bg-success/10 border-success shadow-sm' 
+                      : 'bg-secondary/50 border-border'
+                  }`}>
+                    <div className="mb-2">
+                      {currentSession.dotgrid ? (
+                        <CheckCircle2 className="w-6 h-6 text-success mx-auto" />
+                      ) : (
+                        <Circle className="w-6 h-6 text-muted-foreground mx-auto" />
+                      )}
+                    </div>
+                    <p className="text-sm font-semibold text-foreground mb-1">Dot Grid</p>
+                    <p className="text-xs text-muted-foreground">{currentSession.dotgrid ? 'Complete' : 'Required'}</p>
                   </div>
-                  <div className={`text-center p-2 rounded ${currentSession.flash ? 'bg-success/20 border border-success' : isMobile ? 'bg-secondary' : 'bg-secondary/50 opacity-60'}`}>
-                    <p className="text-xs font-medium">Flash</p>
+                  <div className={`text-center p-4 rounded-xl border-2 transition-all ${
+                    currentSession.flash 
+                      ? 'bg-success/10 border-success shadow-sm' 
+                      : (isDevMode && skipFlashTest)
+                      ? 'bg-secondary/30 border-border opacity-60'
+                      : 'bg-secondary/50 border-border'
+                  }`}>
+                    <div className="mb-2">
+                      {currentSession.flash ? (
+                        <CheckCircle2 className="w-6 h-6 text-success mx-auto" />
+                      ) : (
+                        <Circle className="w-6 h-6 text-muted-foreground mx-auto" />
+                      )}
+                    </div>
+                    <p className="text-sm font-semibold text-foreground mb-1">Flash</p>
                     <p className="text-xs text-muted-foreground">
-                      {currentSession.flash ? '✓ Done' : isMobile ? 'Required' : 'Mobile Only'}
+                      {currentSession.flash ? 'Complete' : (isDevMode && skipFlashTest) ? 'Skipped' : isMobile ? 'Required' : 'Mobile Only'}
                     </p>
                   </div>
                 </div>
+                {isDevMode && !currentSession.flash && (
+                  <div className="mt-4 p-4 bg-secondary/30 rounded-xl border border-border">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={skipFlashTest}
+                        onChange={(e) => setSkipFlashTest(e.target.checked)}
+                        className="w-5 h-5 rounded border-border text-primary focus:ring-primary"
+                      />
+                      <span className="text-sm text-foreground font-medium">
+                        Skip Flash Test (Dev Mode)
+                      </span>
+                    </label>
+                  </div>
+                )}
                 {!canSaveSession() && (
-                  <p className="text-xs text-muted-foreground text-center mt-2">
-                    Complete all 3 tests to generate report
+                  <p className="text-sm text-muted-foreground text-center mt-4">
+                    {isDevMode && skipFlashTest 
+                      ? 'Complete Simple and Dot Grid tests to generate report' 
+                      : 'Complete all 3 tests to generate report'}
                   </p>
                 )}
-              </div>
+              </Card>
             )}
 
+            {/* Start Session Section */}
             {!sessionInProgress && (
-              <div className="text-center py-4">
-                <p className="text-base text-foreground mb-2">
-                  Start New Test Session
-                </p>
-                <p className="text-xs text-muted-foreground mt-2">
-                  Complete all 3 tests to generate report (Flash test requires mobile device)
-                </p>
-              </div>
-            )}
-
+              <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+                <div className="text-center space-y-4">
             <div>
-              <h3 className="text-sm font-semibold mb-2">Test Mode</h3>
-              <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
+                    <h3 className="text-xl font-semibold text-foreground mb-2">Start New Test Session</h3>
+                    <p className="text-sm text-muted-foreground">
+                      {isDevMode 
+                        ? 'Complete Simple and Dot Grid tests to generate report (Flash test can be skipped in dev mode)'
+                        : 'Complete all 3 tests to generate report (Flash test requires mobile device)'}
+                    </p>
+                  </div>
                 <Button
-                  variant={testMode === 'simple' ? 'default' : 'outline'}
                   onClick={() => {
+                      if (!sessionInProgress) {
+                        setSessionInProgress(true)
                     setTestMode('simple')
                     setTestState('idle')
+                      }
                   }}
-                  className="h-auto py-3 sm:py-3 min-h-[60px] flex flex-col items-center gap-1 touch-manipulation"
-                  disabled={(testState !== 'idle' && testState !== 'results') || (sessionInProgress && currentSession.simple !== null)}
+                    size="lg"
+                    className="h-14 px-8 text-base font-semibold bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl shadow-sm"
+                    disabled={!stream}
                 >
-                  <Activity className="w-5 h-5" />
-                  <span className="text-xs font-medium">Simple</span>
-                  {currentSession.simple && <span className="text-xs text-success">✓</span>}
+                    Begin Session
                 </Button>
-                <Button
-                  variant={testMode === 'dotgrid' ? 'default' : 'outline'}
+                </div>
+              </Card>
+            )}
+
+            {/* Test Mode Cards */}
+            <Card className="p-6 sm:p-8 bg-card border border-border rounded-xl card-shadow">
+              <h3 className="text-lg font-semibold mb-6">Test Modes</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* Simple Test Card */}
+                <button
                   onClick={() => {
+                    if ((testState === 'idle' || testState === 'results') && (!sessionInProgress || currentSession.simple === null)) {
+                      setTestMode('simple')
+                      setTestState('idle')
+                    }
+                  }}
+                  disabled={(testState !== 'idle' && testState !== 'results') || (sessionInProgress && currentSession.simple !== null)}
+                  className={`relative p-6 rounded-xl border-2 transition-all duration-200 touch-manipulation text-left ${
+                    testMode === 'simple'
+                      ? 'border-primary bg-primary/5 shadow-md'
+                      : 'border-border bg-card hover:border-primary/50 hover:shadow-sm'
+                  } ${(testState !== 'idle' && testState !== 'results') || (sessionInProgress && currentSession.simple !== null) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <div className="flex items-start justify-between mb-4">
+                    <div className={`p-3 rounded-lg ${testMode === 'simple' ? 'bg-primary/10' : 'bg-secondary'}`}>
+                      <Zap className={`w-6 h-6 ${testMode === 'simple' ? 'text-primary' : 'text-muted-foreground'}`} />
+                    </div>
+                    {currentSession.simple && (
+                      <CheckCircle2 className="w-5 h-5 text-success" />
+                    )}
+                  </div>
+                  <h4 className="font-semibold text-foreground mb-1">Simple Reaction</h4>
+                  <p className="text-xs text-muted-foreground mb-3">Test reaction time to visual stimuli</p>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                      currentSession.simple 
+                        ? 'bg-success/20 text-success' 
+                        : sessionInProgress 
+                        ? 'bg-primary/20 text-primary' 
+                        : 'bg-secondary text-muted-foreground'
+                    }`}>
+                      {currentSession.simple ? 'Complete' : sessionInProgress ? 'In Progress' : 'Not Started'}
+                    </span>
+                  </div>
+                </button>
+
+                {/* Dot Grid Test Card */}
+                <button
+                  onClick={() => {
+                    if ((testState === 'idle' || testState === 'results') && (!sessionInProgress || currentSession.dotgrid === null)) {
                     setTestMode('dotgrid')
                     setTestState('idle')
+                    }
                   }}
-                  className="h-auto py-3 sm:py-3 min-h-[60px] flex flex-col items-center gap-1 touch-manipulation"
                   disabled={(testState !== 'idle' && testState !== 'results') || (sessionInProgress && currentSession.dotgrid !== null)}
+                  className={`relative p-6 rounded-xl border-2 transition-all duration-200 touch-manipulation text-left ${
+                    testMode === 'dotgrid'
+                      ? 'border-primary bg-primary/5 shadow-md'
+                      : 'border-border bg-card hover:border-primary/50 hover:shadow-sm'
+                  } ${(testState !== 'idle' && testState !== 'results') || (sessionInProgress && currentSession.dotgrid !== null) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
                 >
-                  <Brain className="w-5 h-5" />
-                  <span className="text-xs font-medium">Dot Grid</span>
-                  {currentSession.dotgrid && <span className="text-xs text-success">✓</span>}
-                </Button>
-                <Button
-                  variant={testMode === 'flash' ? 'default' : 'outline'}
+                  <div className="flex items-start justify-between mb-4">
+                    <div className={`p-3 rounded-lg ${testMode === 'dotgrid' ? 'bg-primary/10' : 'bg-secondary'}`}>
+                      <Brain className={`w-6 h-6 ${testMode === 'dotgrid' ? 'text-primary' : 'text-muted-foreground'}`} />
+                    </div>
+                    {currentSession.dotgrid && (
+                      <CheckCircle2 className="w-5 h-5 text-success" />
+                    )}
+                  </div>
+                  <h4 className="font-semibold text-foreground mb-1">Dot Grid</h4>
+                  <p className="text-xs text-muted-foreground mb-3">Tap dots quickly (10 rounds)</p>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                      currentSession.dotgrid 
+                        ? 'bg-success/20 text-success' 
+                        : sessionInProgress 
+                        ? 'bg-primary/20 text-primary' 
+                        : 'bg-secondary text-muted-foreground'
+                    }`}>
+                      {currentSession.dotgrid ? 'Complete' : sessionInProgress ? 'In Progress' : 'Not Started'}
+                    </span>
+                  </div>
+                </button>
+
+                {/* Flash Test Card */}
+                <button
                   onClick={() => {
+                    if ((testState === 'idle' || testState === 'results') && (!sessionInProgress || currentSession.flash === null)) {
                     setTestMode('flash')
                     setTestState('idle')
+                    }
                   }}
-                  className="h-auto py-3 sm:py-3 min-h-[60px] flex flex-col items-center gap-1 touch-manipulation"
-                  disabled={(testState !== 'idle' && testState !== 'results') || (sessionInProgress && currentSession.flash !== null)}
+                  disabled={(testState !== 'idle' && testState !== 'results') || (sessionInProgress && currentSession.flash !== null) || !isMobile}
+                  className={`relative p-6 rounded-xl border-2 transition-all duration-200 touch-manipulation text-left ${
+                    testMode === 'flash'
+                      ? 'border-primary bg-primary/5 shadow-md'
+                      : 'border-border bg-card hover:border-primary/50 hover:shadow-sm'
+                  } ${(testState !== 'idle' && testState !== 'results') || (sessionInProgress && currentSession.flash !== null) || !isMobile ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
                 >
-                  <Zap className="w-5 h-5" />
-                  <span className="text-xs font-medium">Flash Test</span>
-                  {currentSession.flash && <span className="text-xs text-success">✓</span>}
-                </Button>
+                  <div className="flex items-start justify-between mb-4">
+                    <div className={`p-3 rounded-lg ${testMode === 'flash' ? 'bg-primary/10' : 'bg-secondary'}`}>
+                      <Eye className={`w-6 h-6 ${testMode === 'flash' ? 'text-primary' : 'text-muted-foreground'}`} />
               </div>
+                    {currentSession.flash && (
+                      <CheckCircle2 className="w-5 h-5 text-success" />
+                    )}
             </div>
+                  <h4 className="font-semibold text-foreground mb-1">Flash Test</h4>
+                  <p className="text-xs text-muted-foreground mb-3">Eye fatigue analysis (mobile only)</p>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                      currentSession.flash 
+                        ? 'bg-success/20 text-success' 
+                        : !isMobile
+                        ? 'bg-muted text-muted-foreground'
+                        : sessionInProgress 
+                        ? 'bg-primary/20 text-primary' 
+                        : 'bg-secondary text-muted-foreground'
+                    }`}>
+                      {currentSession.flash ? 'Complete' : !isMobile ? 'Mobile Only' : sessionInProgress ? 'In Progress' : 'Not Started'}
+                    </span>
+                  </div>
+                </button>
+              </div>
+            </Card>
 
             {/* Test Area */}
             <div className="space-y-3">
@@ -2891,7 +3301,7 @@ export default function NeuroPulsePage() {
                       {canSaveSession()
                         ? 'Combined NeuroScore (All Tests Complete)' 
                         : (currentSession.simple || currentSession.dotgrid || currentSession.flash)
-                        ? `Session Progress: ${[currentSession.simple, currentSession.dotgrid, currentSession.flash].filter(Boolean).length}/3 Required`
+                        ? `Session Progress: ${[currentSession.simple, currentSession.dotgrid, currentSession.flash].filter(Boolean).length}/${isDevMode && skipFlashTest ? '2' : '3'} Required`
                         : 'NeuroScore'}
                     </p>
                     <p className="text-4xl sm:text-5xl font-bold text-foreground mb-2">
@@ -2990,117 +3400,135 @@ export default function NeuroPulsePage() {
                     </div>
                   )}
 
-                  {/* Fatigue Indicators Section */}
+                  {/* Scientific Fatigue Metrics Block */}
                   {testState === 'results' && (
                     ((testMode === 'simple' && results?.fatigueMetrics) ||
                      (testMode === 'dotgrid' && dotGridResults?.fatigueMetrics) ||
                      (testMode === 'flash' && flashTestResults?.fatigueMetrics)) && (
-                    <div className="space-y-3 pt-2 border-t border-border">
-                      <h3 className="text-sm font-semibold text-foreground">Fatigue Indicators</h3>
-                      
+                    <Card className="p-6 bg-card border border-border rounded-xl card-shadow">
+                      <div className="mb-6">
+                        <h3 className="text-lg font-semibold text-foreground mb-1">Scientific Fatigue Metrics</h3>
+                        <p className="text-sm text-muted-foreground">PVT-based cognitive fatigue indicators</p>
+                      </div>
+                      <div className="space-y-1">
                       {testMode === 'simple' && results?.fatigueMetrics && (
-                        <div className="space-y-2">
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">Avg Reaction Time</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Average reaction time from all responses. <strong>Ideal: 200-300ms</strong> for Simple Test.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className="text-sm font-semibold text-foreground">
-                                {results.fatigueMetrics.averageReactionTime}<span className="text-xs">ms</span>
-                              </p>
-                            </div>
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">RT Variability</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Standard deviation of reaction times. Measures consistency. <strong>Ideal: &lt;50ms</strong> (lower is better).</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className="text-sm font-semibold text-foreground">
-                                {results.fatigueMetrics.reactionTimeVariability}<span className="text-xs">ms</span>
-                              </p>
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-3 gap-2">
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">Lapses</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Reaction times &gt;500ms or timeouts. Key fatigue indicator. <strong>Ideal: 0</strong>.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className={`text-sm font-semibold ${results.fatigueMetrics.lapses > 0 ? 'text-destructive' : 'text-foreground'}`}>
-                                {results.fatigueMetrics.lapses}
-                              </p>
-                            </div>
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">False Starts</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Anticipatory responses (&lt;200ms). Indicates impulsive behavior. <strong>Ideal: 0</strong>.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className={`text-sm font-semibold ${results.fatigueMetrics.falseStarts > 0 ? 'text-destructive' : 'text-foreground'}`}>
-                                {results.fatigueMetrics.falseStarts}
-                              </p>
-                            </div>
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">Std Dev</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Standard deviation of reaction times. Same as RT Variability. <strong>Ideal: &lt;50ms</strong>.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className="text-sm font-semibold text-foreground">
-                                {results.fatigueMetrics.standardDeviation}<span className="text-xs">ms</span>
-                              </p>
-                            </div>
-                          </div>
-                          <div className="bg-secondary/50 p-2 rounded text-center">
-                            <div className="flex items-center justify-center gap-1 mb-0.5">
-                              <p className="text-xs text-muted-foreground">Error Rate</p>
+                        <>
+                          {/* Metric Rows - Two Column Layout */}
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Average Reaction Time</span>
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <button type="button" className="inline-flex items-center">
-                                    <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Average reaction time from all responses. <strong>Ideal: 200-300ms</strong> for Simple Test.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{results.fatigueMetrics.averageReactionTime}ms</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                results.fatigueMetrics.averageReactionTime <= 300 ? 'bg-success' :
+                                results.fatigueMetrics.averageReactionTime <= 400 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Reaction Time Variability</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Standard deviation of reaction times. Measures consistency. <strong>Ideal: &lt;50ms</strong> (lower is better).</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{results.fatigueMetrics.reactionTimeVariability}ms</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                results.fatigueMetrics.reactionTimeVariability < 50 ? 'bg-success' :
+                                results.fatigueMetrics.reactionTimeVariability < 100 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Lapses</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Reaction times &gt;500ms or timeouts. Key fatigue indicator. <strong>Ideal: 0</strong>.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-base font-bold ${results.fatigueMetrics.lapses > 0 ? 'text-destructive' : 'text-foreground'}`}>
+                                {results.fatigueMetrics.lapses}
+                              </span>
+                              <div className={`w-2 h-2 rounded-full ${results.fatigueMetrics.lapses > 0 ? 'bg-destructive' : 'bg-success'}`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">False Starts</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Anticipatory responses (&lt;200ms). Indicates impulsive behavior. <strong>Ideal: 0</strong>.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-base font-bold ${results.fatigueMetrics.falseStarts > 0 ? 'text-destructive' : 'text-foreground'}`}>
+                                {results.fatigueMetrics.falseStarts}
+                              </span>
+                              <div className={`w-2 h-2 rounded-full ${results.fatigueMetrics.falseStarts > 0 ? 'bg-destructive' : 'bg-success'}`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Standard Deviation</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Standard deviation of reaction times. Same as RT Variability. <strong>Ideal: &lt;50ms</strong>.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{results.fatigueMetrics.standardDeviation}ms</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                results.fatigueMetrics.standardDeviation < 50 ? 'bg-success' :
+                                results.fatigueMetrics.standardDeviation < 100 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Error Rate</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
                                   </button>
                                 </TooltipTrigger>
                                 <TooltipContent>
@@ -3108,119 +3536,139 @@ export default function NeuroPulsePage() {
                                 </TooltipContent>
                               </Tooltip>
                             </div>
-                            <p className="text-sm font-semibold text-foreground">
-                              {results.fatigueMetrics.errorRate}%
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{results.fatigueMetrics.errorRate}%</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                results.fatigueMetrics.errorRate < 5 ? 'bg-success' :
+                                results.fatigueMetrics.errorRate < 10 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="mt-6 pt-4 border-t border-border">
+                            <p className="text-sm text-foreground leading-relaxed font-medium">
+                              {results.fatigueMetrics.interpretation}
                             </p>
                           </div>
-                          <p className="text-xs text-muted-foreground italic text-center pt-1">
-                            {results.fatigueMetrics.interpretation}
-                          </p>
-                        </div>
+                        </>
                       )}
 
                       {testMode === 'dotgrid' && dotGridResults?.fatigueMetrics && (
-                        <div className="space-y-2">
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">Avg Reaction Time</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Average reaction time across all 10 dot rounds. <strong>Ideal: 200-400ms</strong> for Dot Grid Test.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className="text-sm font-semibold text-foreground">
-                                {dotGridResults.fatigueMetrics.averageReactionTime}<span className="text-xs">ms</span>
-                              </p>
-                            </div>
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">RT Variability</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Standard deviation of reaction times. Measures consistency. <strong>Ideal: &lt;50ms</strong> (lower is better).</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className="text-sm font-semibold text-foreground">
-                                {dotGridResults.fatigueMetrics.reactionTimeVariability}<span className="text-xs">ms</span>
-                              </p>
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-3 gap-2">
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">Lapses</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Reaction times &gt;500ms or timeouts. Key fatigue indicator. <strong>Ideal: 0</strong>.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className={`text-sm font-semibold ${dotGridResults.fatigueMetrics.lapses > 0 ? 'text-destructive' : 'text-foreground'}`}>
-                                {dotGridResults.fatigueMetrics.lapses}
-                              </p>
-                            </div>
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">False Starts</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Anticipatory responses (&lt;200ms). Indicates impulsive behavior. <strong>Ideal: 0</strong>.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className={`text-sm font-semibold ${dotGridResults.fatigueMetrics.falseStarts > 0 ? 'text-destructive' : 'text-foreground'}`}>
-                                {dotGridResults.fatigueMetrics.falseStarts}
-                              </p>
-                            </div>
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">Std Dev</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Standard deviation of reaction times. Same as RT Variability. <strong>Ideal: &lt;50ms</strong>.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className="text-sm font-semibold text-foreground">
-                                {dotGridResults.fatigueMetrics.standardDeviation}<span className="text-xs">ms</span>
-                              </p>
-                            </div>
-                          </div>
-                          <div className="bg-secondary/50 p-2 rounded text-center">
-                            <div className="flex items-center justify-center gap-1 mb-0.5">
-                              <p className="text-xs text-muted-foreground">Error Rate</p>
+                        <>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Average Reaction Time</span>
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <button type="button" className="inline-flex items-center">
-                                    <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Average reaction time across all 10 dot rounds. <strong>Ideal: 200-400ms</strong> for Dot Grid Test.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{dotGridResults.fatigueMetrics.averageReactionTime}ms</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                dotGridResults.fatigueMetrics.averageReactionTime <= 400 ? 'bg-success' :
+                                dotGridResults.fatigueMetrics.averageReactionTime <= 500 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Reaction Time Variability</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Standard deviation of reaction times. Measures consistency. <strong>Ideal: &lt;50ms</strong> (lower is better).</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{dotGridResults.fatigueMetrics.reactionTimeVariability}ms</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                dotGridResults.fatigueMetrics.reactionTimeVariability < 50 ? 'bg-success' :
+                                dotGridResults.fatigueMetrics.reactionTimeVariability < 100 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Lapses</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Reaction times &gt;500ms or timeouts. Key fatigue indicator. <strong>Ideal: 0</strong>.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-base font-bold ${dotGridResults.fatigueMetrics.lapses > 0 ? 'text-destructive' : 'text-foreground'}`}>
+                                {dotGridResults.fatigueMetrics.lapses}
+                              </span>
+                              <div className={`w-2 h-2 rounded-full ${dotGridResults.fatigueMetrics.lapses > 0 ? 'bg-destructive' : 'bg-success'}`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">False Starts</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Anticipatory responses (&lt;200ms). Indicates impulsive behavior. <strong>Ideal: 0</strong>.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-base font-bold ${dotGridResults.fatigueMetrics.falseStarts > 0 ? 'text-destructive' : 'text-foreground'}`}>
+                                {dotGridResults.fatigueMetrics.falseStarts}
+                              </span>
+                              <div className={`w-2 h-2 rounded-full ${dotGridResults.fatigueMetrics.falseStarts > 0 ? 'bg-destructive' : 'bg-success'}`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Standard Deviation</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Standard deviation of reaction times. Same as RT Variability. <strong>Ideal: &lt;50ms</strong>.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{dotGridResults.fatigueMetrics.standardDeviation}ms</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                dotGridResults.fatigueMetrics.standardDeviation < 50 ? 'bg-success' :
+                                dotGridResults.fatigueMetrics.standardDeviation < 100 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Error Rate</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
                                   </button>
                                 </TooltipTrigger>
                                 <TooltipContent>
@@ -3228,119 +3676,139 @@ export default function NeuroPulsePage() {
                                 </TooltipContent>
                               </Tooltip>
                             </div>
-                            <p className="text-sm font-semibold text-foreground">
-                              {dotGridResults.fatigueMetrics.errorRate}%
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{dotGridResults.fatigueMetrics.errorRate}%</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                dotGridResults.fatigueMetrics.errorRate < 5 ? 'bg-success' :
+                                dotGridResults.fatigueMetrics.errorRate < 10 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="mt-6 pt-4 border-t border-border">
+                            <p className="text-sm text-foreground leading-relaxed font-medium">
+                              {dotGridResults.fatigueMetrics.interpretation}
                             </p>
                           </div>
-                          <p className="text-xs text-muted-foreground italic text-center pt-1">
-                            {dotGridResults.fatigueMetrics.interpretation}
-                          </p>
-                        </div>
+                        </>
                       )}
 
                       {testMode === 'flash' && flashTestResults?.fatigueMetrics && (
-                        <div className="space-y-2">
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">Avg Reaction Time</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Average pupil response time to flash stimuli. <strong>Ideal: 200-300ms</strong> for Flash Test.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className="text-sm font-semibold text-foreground">
-                                {flashTestResults.fatigueMetrics.averageReactionTime}<span className="text-xs">ms</span>
-                              </p>
-                            </div>
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">RT Variability</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Standard deviation of reaction times. Measures consistency. <strong>Ideal: &lt;50ms</strong> (lower is better).</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className="text-sm font-semibold text-foreground">
-                                {flashTestResults.fatigueMetrics.reactionTimeVariability}<span className="text-xs">ms</span>
-                              </p>
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-3 gap-2">
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">Lapses</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Reaction times &gt;500ms or timeouts. Key fatigue indicator. <strong>Ideal: 0</strong>.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className={`text-sm font-semibold ${flashTestResults.fatigueMetrics.lapses > 0 ? 'text-destructive' : 'text-foreground'}`}>
-                                {flashTestResults.fatigueMetrics.lapses}
-                              </p>
-                            </div>
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">False Starts</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Anticipatory responses (&lt;200ms). Indicates impulsive behavior. <strong>Ideal: 0</strong>.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className={`text-sm font-semibold ${flashTestResults.fatigueMetrics.falseStarts > 0 ? 'text-destructive' : 'text-foreground'}`}>
-                                {flashTestResults.fatigueMetrics.falseStarts}
-                              </p>
-                            </div>
-                            <div className="bg-secondary/50 p-2 rounded text-center">
-                              <div className="flex items-center justify-center gap-1 mb-0.5">
-                                <p className="text-xs text-muted-foreground">Std Dev</p>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button type="button" className="inline-flex items-center">
-                                      <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="max-w-xs">Standard deviation of reaction times. Same as RT Variability. <strong>Ideal: &lt;50ms</strong>.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                              <p className="text-sm font-semibold text-foreground">
-                                {flashTestResults.fatigueMetrics.standardDeviation}<span className="text-xs">ms</span>
-                              </p>
-                            </div>
-                          </div>
-                          <div className="bg-secondary/50 p-2 rounded text-center">
-                            <div className="flex items-center justify-center gap-1 mb-0.5">
-                              <p className="text-xs text-muted-foreground">Error Rate</p>
+                        <>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Average Reaction Time</span>
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <button type="button" className="inline-flex items-center">
-                                    <Info className="w-2.5 h-2.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Average pupil response time to flash stimuli. <strong>Ideal: 200-300ms</strong> for Flash Test.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{flashTestResults.fatigueMetrics.averageReactionTime}ms</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                flashTestResults.fatigueMetrics.averageReactionTime <= 300 ? 'bg-success' :
+                                flashTestResults.fatigueMetrics.averageReactionTime <= 400 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Reaction Time Variability</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Standard deviation of reaction times. Measures consistency. <strong>Ideal: &lt;50ms</strong> (lower is better).</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{flashTestResults.fatigueMetrics.reactionTimeVariability}ms</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                flashTestResults.fatigueMetrics.reactionTimeVariability < 50 ? 'bg-success' :
+                                flashTestResults.fatigueMetrics.reactionTimeVariability < 100 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Lapses</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Reaction times &gt;500ms or timeouts. Key fatigue indicator. <strong>Ideal: 0</strong>.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-base font-bold ${flashTestResults.fatigueMetrics.lapses > 0 ? 'text-destructive' : 'text-foreground'}`}>
+                                {flashTestResults.fatigueMetrics.lapses}
+                              </span>
+                              <div className={`w-2 h-2 rounded-full ${flashTestResults.fatigueMetrics.lapses > 0 ? 'bg-destructive' : 'bg-success'}`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">False Starts</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Anticipatory responses (&lt;200ms). Indicates impulsive behavior. <strong>Ideal: 0</strong>.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-base font-bold ${flashTestResults.fatigueMetrics.falseStarts > 0 ? 'text-destructive' : 'text-foreground'}`}>
+                                {flashTestResults.fatigueMetrics.falseStarts}
+                              </span>
+                              <div className={`w-2 h-2 rounded-full ${flashTestResults.fatigueMetrics.falseStarts > 0 ? 'bg-destructive' : 'bg-success'}`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3 border-b border-border/50">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Standard Deviation</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="max-w-xs">Standard deviation of reaction times. Same as RT Variability. <strong>Ideal: &lt;50ms</strong>.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{flashTestResults.fatigueMetrics.standardDeviation}ms</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                flashTestResults.fatigueMetrics.standardDeviation < 50 ? 'bg-success' :
+                                flashTestResults.fatigueMetrics.standardDeviation < 100 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between py-3">
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-medium text-foreground">Error Rate</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button type="button" className="inline-flex items-center">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
                                   </button>
                                 </TooltipTrigger>
                                 <TooltipContent>
@@ -3348,16 +3816,23 @@ export default function NeuroPulsePage() {
                                 </TooltipContent>
                               </Tooltip>
                             </div>
-                            <p className="text-sm font-semibold text-foreground">
-                              {flashTestResults.fatigueMetrics.errorRate}%
+                            <div className="flex items-center gap-2">
+                              <span className="text-base font-bold text-foreground">{flashTestResults.fatigueMetrics.errorRate}%</span>
+                              <div className={`w-2 h-2 rounded-full ${
+                                flashTestResults.fatigueMetrics.errorRate < 5 ? 'bg-success' :
+                                flashTestResults.fatigueMetrics.errorRate < 10 ? 'bg-primary' : 'bg-destructive'
+                              }`} />
+                            </div>
+                          </div>
+                          <div className="mt-6 pt-4 border-t border-border">
+                            <p className="text-sm text-foreground leading-relaxed font-medium">
+                              {flashTestResults.fatigueMetrics.interpretation}
                             </p>
                           </div>
-                          <p className="text-xs text-muted-foreground italic text-center pt-1">
-                            {flashTestResults.fatigueMetrics.interpretation}
-                          </p>
-                        </div>
+                        </>
                       )}
-                    </div>
+                      </div>
+                    </Card>
                     )
                   )}
 
@@ -3747,87 +4222,104 @@ export default function NeuroPulsePage() {
                 </div>
               )}
             </div>
-          </Card>
+          </div>
         )}
 
         {/* AI Report Card - Only show when all 3 tests are completed */}
         {viewMode === 'test' && canSaveSession() && (
-          <div ref={reportCardRef}>
-          <Card className="p-3 sm:p-4 space-y-3 bg-card border-medical border-2 border-primary/30 animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <div className="flex items-center gap-2 mb-2">
-            <Brain className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
-            <h2 className="text-base sm:text-lg font-bold text-foreground">Complete Test Report</h2>
-            <span className="ml-auto text-xs font-semibold px-2 py-1 bg-success/20 text-success rounded">
-              All Tests Complete
-            </span>
+          <div ref={reportCardRef} className="max-w-3xl mx-auto">
+            <Card className="p-8 sm:p-10 bg-card border border-border rounded-2xl card-shadow-lg animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {/* Report Header */}
+              <div className="flex items-start justify-between mb-8 pb-6 border-b border-border">
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-primary/10 rounded-xl">
+                    <Brain className="w-8 h-8 text-primary" />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl sm:text-3xl font-bold text-foreground mb-1">Complete Test Report</h2>
+                    <p className="text-sm text-muted-foreground">Cognitive Fatigue Assessment</p>
+                  </div>
+                </div>
+                <span className="px-3 py-1.5 bg-success/20 text-success rounded-full text-xs font-semibold border border-success/30">
+                  All Tests Complete
+                </span>
           </div>
 
-          <div className="space-y-4">
-            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 sm:p-4">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                Executive Summary
-              </h3>
-              <p className="text-sm sm:text-base text-foreground leading-relaxed font-medium">
-                {aiInsights.summary}
-              </p>
-            </div>
+              <div className="space-y-8">
+                {/* Executive Summary */}
+                <div className="bg-primary/5 border-l-4 border-primary rounded-xl p-6 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 bg-primary/10 rounded-lg">
+                      <Brain className="w-5 h-5 text-primary" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-foreground">Executive Summary</h3>
+                  </div>
+                  <p className="text-base text-foreground leading-relaxed font-medium">
+              {aiInsights.summary}
+            </p>
+                </div>
 
-            {/* Observations */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                Key Observations
-              </h3>
-              <ul className="space-y-2">
+                {/* Key Observations */}
+                <div className="space-y-4">
+                  <h3 className="text-base font-semibold text-foreground uppercase tracking-wide">Key Observations</h3>
+                  <div className="space-y-3">
                 {aiInsights.observations.map((obs, idx) => (
-                  <li key={idx} className="flex items-start gap-2 text-sm text-foreground">
-                    <span className="text-primary mt-0.5 font-bold">•</span>
-                    <span className="flex-1">{obs}</span>
-                  </li>
-                ))}
-              </ul>
+                      <div key={idx} className="flex items-start gap-4 p-4 bg-secondary/30 rounded-xl border border-border/50">
+                        <div className="w-2 h-2 rounded-full bg-primary mt-2 flex-shrink-0" />
+                        <p className="text-sm text-foreground leading-relaxed flex-1">{obs}</p>
+                      </div>
+                    ))}
+                  </div>
             </div>
 
-            {/* Suggestion */}
-            <div className="bg-accent/20 border-2 border-accent rounded-lg p-3 sm:p-4 space-y-2">
-              <div className="flex items-center gap-2">
-                <AlertCircle className="w-5 h-5 text-accent-foreground" />
-                <h3 className="text-sm font-bold text-accent-foreground">
-                  Safety Recommendation
+                {/* Safety Recommendation */}
+                <div className="bg-success/10 border-l-4 border-success rounded-xl p-6 space-y-3 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <AlertCircle className="w-6 h-6 text-success" />
+                    <h3 className="text-lg font-bold text-success">
+                      Safety Recommendation
                 </h3>
               </div>
-              <p className="text-sm text-accent-foreground leading-relaxed font-medium">
+                  <p className="text-base text-foreground leading-relaxed font-medium">
                 {aiInsights.suggestion}
               </p>
             </div>
 
-            {/* Combined Score Display */}
-            <div className="bg-secondary/50 rounded-lg p-3 sm:p-4 text-center border border-border">
-              <p className="text-xs text-muted-foreground mb-1">Final Combined NeuroScore</p>
-              <p className="text-3xl sm:text-4xl font-bold text-foreground mb-1">
-                {calculateCombinedNeuroScore()}
-              </p>
-              <p className={`text-sm font-semibold ${
-                calculateCombinedNeuroScore() >= 75 ? 'text-success' :
-                calculateCombinedNeuroScore() >= 50 ? 'text-primary' : 
-                'text-destructive'
-              }`}>
-                {getAlertLevel(calculateCombinedNeuroScore())}
-              </p>
+                {/* Final Combined NeuroScore - Visual Centerpiece */}
+                <div className="bg-gradient-to-br from-primary/10 to-accent/10 rounded-2xl p-8 sm:p-10 text-center border-2 border-primary/20 shadow-lg">
+                  <p className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-4">Final Combined NeuroScore</p>
+                  <p className="text-6xl sm:text-7xl font-bold text-foreground mb-4">
+                    {calculateCombinedNeuroScore()}
+                  </p>
+                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-card border border-border">
+                    <div className={`w-2 h-2 rounded-full ${
+                      calculateCombinedNeuroScore() >= 75 ? 'bg-success' :
+                      calculateCombinedNeuroScore() >= 50 ? 'bg-primary' : 
+                      'bg-destructive'
+                    }`} />
+                    <p className={`text-base font-semibold ${
+                      calculateCombinedNeuroScore() >= 75 ? 'text-success' :
+                      calculateCombinedNeuroScore() >= 50 ? 'text-primary' : 
+                      'text-destructive'
+                    }`}>
+                      {getAlertLevel(calculateCombinedNeuroScore())}
+                    </p>
+                  </div>
             </div>
 
             {/* Disclaimer */}
-            <div className="pt-2 border-t border-border">
-              <p className="text-xs text-muted-foreground italic text-center">
-                This is a safety screening tool, not a medical diagnosis.
+                <div className="pt-6 border-t border-border">
+                  <p className="text-xs text-muted-foreground italic text-center leading-relaxed">
+                    This is a safety screening tool, not a medical diagnosis. Consult with a healthcare professional for medical advice.
               </p>
             </div>
           </div>
         </Card>
-        </div>
+          </div>
         )}
 
         {viewMode === 'test' && (
-        <Card className="p-3 bg-secondary/50 border-border">
+          <Card className="p-4 bg-secondary/30 border border-border rounded-xl">
           <p className="text-xs text-muted-foreground text-center leading-relaxed">
             Quick cognitive assessment using reaction time, facial micro-movement analysis, and visual tracking performance
           </p>
@@ -3835,6 +4327,7 @@ export default function NeuroPulsePage() {
         )}
           </>
         )}
+        </div>
       </div>
     </main>
     </TooltipProvider>
