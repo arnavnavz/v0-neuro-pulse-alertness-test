@@ -3307,6 +3307,9 @@ export default function NeuroPulsePage() {
                       <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
                         <Play className="w-4 h-4" />
                         Recorded Video
+                        {testMode === 'simple' && <span className="text-xs font-normal text-muted-foreground">(Simple Test)</span>}
+                        {testMode === 'dotgrid' && <span className="text-xs font-normal text-muted-foreground">(Dot Grid Test)</span>}
+                        {testMode === 'flash' && <span className="text-xs font-normal text-muted-foreground">(Flash Test - Back Camera)</span>}
                       </h3>
                       <div className="relative aspect-video bg-black rounded-lg overflow-hidden border-2 border-border">
                         <video
@@ -3319,7 +3322,9 @@ export default function NeuroPulsePage() {
                         </video>
                       </div>
                       <p className="text-xs text-muted-foreground text-center">
-                        Watch the recorded video from your test session
+                        {testMode === 'flash' 
+                          ? 'Watch the recorded video from your flash test session. This video shows your eye response to the flash stimuli.'
+                          : 'Watch the recorded video from your test session'}
                       </p>
                     </div>
                   )}
